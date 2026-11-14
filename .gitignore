@@ -1,0 +1,77 @@
+# ---------- Documentos personales de planeación ----------
+PLAN.md
+agente-patrones-avanzados.md
+Proyecto Final - Patrones Arquitectónicos Avanzados (AegisVolt).md
+
+# ---------- Node / TypeScript ----------
+node_modules/
+.pnpm-store/
+dist/
+build/
+coverage/
+*.tsbuildinfo
+.vite/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# ---------- Tests ----------
+playwright-report/
+test-results/
+blob-report/
+.nyc_output/
+
+# ---------- Python / Prefect ----------
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.prefect/
+
+# ---------- Terraform ----------
+**/.terraform/*
+*.tfstate
+*.tfstate.*
+*.tfplan
+tfplan
+crash.log
+crash.*.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+.terraformrc
+terraform.rc
+# El lock file SÍ se versiona (.terraform.lock.hcl)
+
+# ---------- Secretos / entorno ----------
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+kubeconfig*
+.aws/
+
+# ---------- Floci / datos locales ----------
+.floci/
+floci-data/
+volume/
+*.local.json
+
+# ---------- IDE / SO ----------
+.idea/
+.vscode/*
+!.vscode/extensions.json
+*.swp
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ---------- Logs ----------
+logs/
+*.log

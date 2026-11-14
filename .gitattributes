@@ -1,0 +1,6 @@
+# Normaliza finales de línea: los scripts bash y YAML deben ser LF aunque se edite en Windows.
+* text=auto eol=lf
+*.sh text eol=lf
+*.ps1 text eol=crlf
+*.png binary
+*.jpg binary

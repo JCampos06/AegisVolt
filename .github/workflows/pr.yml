@@ -1,0 +1,36 @@
+# Pipeline pre-merge (Pull Request hacia dev / test / prod).
+# Día 1: promotion-guard. Día 5: lint-build, unit, integration, e2e y terraform-plan.
+name: pr
+
+on:
+  pull_request:
+    branches: [dev, test, prod]
+
+permissions:
+  contents: read
+
+jobs:
+  promotion-guard:
+    name: promotion-guard
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validar cadena de promoción feature -> dev -> test -> prod
+        env:
+          BASE: ${{ github.base_ref }}
+          HEAD: ${{ github.head_ref }}
+        run: |
+          echo "PR: $HEAD -> $BASE"
+          case "$BASE" in
+            dev)
+              case "$HEAD" in
+                feature/*|fix/*|chore/*|docs/*) ;;
+                *) echo "::error::Hacia dev solo se aceptan ramas feature/*, fix/*, chore/* o docs/* (recibido: $HEAD)"; exit 1 ;;
+              esac ;;
+            test)
+              [ "$HEAD" = "dev" ] || { echo "::error::Hacia test solo se promueve desde dev (recibido: $HEAD)"; exit 1; } ;;
+            prod)
+              [ "$HEAD" = "test" ] || { echo "::error::Hacia prod solo se promueve desde test (recibido: $HEAD)"; exit 1; } ;;
+            *)
+              echo "::error::Rama destino no gestionada: $BASE"; exit 1 ;;
+          esac
+          echo "Promoción válida."

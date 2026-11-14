@@ -1,0 +1,27 @@
+# Clúster local de Kubernetes para AegisVolt.
+# Un solo clúster con un namespace por ambiente (aegisvolt-dev|test|prod).
+# Puertos 80/443 del nodo expuestos al host para el NGINX Ingress Controller.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: aegisvolt
+containerdConfigPatches:
+  - |-
+    [plugins."io.containerd.grpc.v1.cri".registry]
+      config_path = "/etc/containerd/certs.d"
+nodes:
+  - role: control-plane
+    kubeadmConfigPatches:
+      - |
+        kind: InitConfiguration
+        nodeRegistration:
+          kubeletExtraArgs:
+            node-labels: "ingress-ready=true"
+    extraPortMappings:
+      - containerPort: 80
+        hostPort: 8080
+        protocol: TCP
+      - containerPort: 443
+        hostPort: 8443
+        protocol: TCP
+  - role: worker
+  - role: worker

@@ -1,0 +1,31 @@
+# AegisVolt — entorno local
+# Día 1: solo Floci (emulador AWS). Los servicios, gateway y Prefect se agregan en días posteriores.
+name: aegisvolt
+
+services:
+  floci:
+    # Versión fija (nunca latest). La variante -compat incluye AWS CLI para verificaciones.
+    image: floci/floci:2.4.0-compat
+    container_name: aegisvolt-floci
+    ports:
+      - "4566:4566"
+    environment:
+      FLOCI_HOSTNAME: floci
+      FLOCI_DEFAULT_REGION: us-east-1
+      # Persistencia en disco: el bucket del tfstate y las tablas sobreviven reinicios.
+      FLOCI_STORAGE_MODE: persistent
+      FLOCI_STORAGE_PERSISTENT_PATH: /app/data
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      AWS_DEFAULT_REGION: us-east-1
+    volumes:
+      - ./.floci/data:/app/data
+      # Necesario para servicios respaldados por Docker (EC2, EKS, Lambda) y la consola web.
+      - /var/run/docker.sock:/var/run/docker.sock
+    user: root
+    healthcheck:
+      test: ["CMD-SHELL", "aws --endpoint-url http://localhost:4566 sts get-caller-identity >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    restart: unless-stopped
