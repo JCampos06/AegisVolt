@@ -7,7 +7,7 @@
 #   bash scripts/tf.sh infra workspace select dev
 set -euo pipefail
 
-TF_VERSION="1.14.0"
+TF_VERSION="1.17.1"  # misma versión que el binario local
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DIR="$1"; shift
 

@@ -10,7 +10,7 @@ Plataforma cloud-native de gestión de carga para flotas de vehículos eléctric
 |---|---|
 | Nube (emulada) | [Floci](https://floci.io) 2.4.0: S3, DynamoDB, API Gateway, VPC/VPCE, CloudWatch |
 | Kubernetes | kind (un namespace por ambiente) + Argo Rollouts (canary) + NGINX Ingress |
-| IaC | Terraform 1.14 · backend S3 versionado · un workspace por ambiente |
+| IaC | Terraform 1.17 · backend S3 versionado · un workspace por ambiente |
 | Backend | TypeScript / Node 24 · Apollo Server (GraphQL) · Fastify |
 | Frontend | React + Vite + Apollo Client |
 | Observabilidad | CloudWatch Logs (JSON con `correlation_id`) + Prefect 3 |
@@ -20,7 +20,7 @@ Plataforma cloud-native de gestión de carga para flotas de vehículos eléctric
 
 Docker, kubectl, kind, Terraform ≥ 1.10, Node 24 + pnpm, AWS CLI v2 y Git Bash (en Windows).
 
-> Sin Terraform ni AWS CLI instalados, `scripts/tf.sh` usa la imagen `hashicorp/terraform:1.14.0` y los scripts usan el AWS CLI incluido en el contenedor de Floci.
+> Sin Terraform ni AWS CLI instalados, `scripts/tf.sh` usa la imagen `hashicorp/terraform:1.17.1` y los scripts usan el AWS CLI incluido en el contenedor de Floci.
 
 ## Inicio rápido
 
