@@ -67,4 +67,14 @@ docs/adr/               decisiones de arquitectura
 
 - [ADR-0001](docs/adr/0001-floci-kind-como-nube-local.md) — Floci + kind como plataforma de ejecución
 - [ADR-0007](docs/adr/0007-estado-terraform-s3-versionado-workspaces.md) — Estado en S3 versionado + workspaces
+- [ADR-0008](docs/adr/0008-topologia-red-vpc-vpce.md) — Topología de red VPC / VPC Endpoints
 - [ADR-0010](docs/adr/0010-rulesets-y-promotion-guard.md) — Rulesets + promotion-guard
+
+Vista completa (red, datos y recorrido de un paquete): [docs/arquitectura.md](docs/arquitectura.md)
+
+## Feature flags (en caliente, sin redeploy)
+
+```bash
+bash scripts/toggle-flag.sh dev                                      # lista las flags de dev
+bash scripts/toggle-flag.sh test SIMULATE_CHARGER_HARDWARE_FAULT true
+```
