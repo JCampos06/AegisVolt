@@ -105,7 +105,7 @@ export function buildApp({ config, logger, repo, flags, healthCheck }: Reservati
     },
   );
 
-  // Compensación C1: liberar el conector.
+  // Compensación C1 de la SAGA, o fin normal de la carga (stopChargingSession): liberar el conector.
   app.post<{ Params: { sagaId: string } }>(
     '/reservations/:sagaId/release',
     { schema: { params: { type: 'object', properties: { sagaId: id }, required: ['sagaId'] } } },
@@ -115,7 +115,7 @@ export function buildApp({ config, logger, repo, flags, healthCheck }: Reservati
       const result = await repo.release(sagaId);
       req.log
         .child({ saga_step: 'release', sagaId })
-        .info({ outcome: result.outcome, alreadyApplied: result.alreadyApplied }, 'compensación de reserva');
+        .info({ outcome: result.outcome, alreadyApplied: result.alreadyApplied }, 'liberación de conector');
       return result;
     },
   );

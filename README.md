@@ -66,7 +66,9 @@ docs/adr/               decisiones de arquitectura
 ## Decisiones de arquitectura
 
 - [ADR-0001](docs/adr/0001-floci-kind-como-nube-local.md) — Floci + kind como plataforma de ejecución
+- [ADR-0002](docs/adr/0002-saga-orquestada-en-gateway.md) — SAGA orquestada dentro del gateway
 - [ADR-0003](docs/adr/0003-idempotencia-escrituras-condicionales.md) — Idempotencia con escrituras condicionales en DynamoDB
+- [ADR-0005](docs/adr/0005-graphql-bff-y-rest-interno.md) — GraphQL como BFF y REST interno
 - [ADR-0007](docs/adr/0007-estado-terraform-s3-versionado-workspaces.md) — Estado en S3 versionado + workspaces
 - [ADR-0008](docs/adr/0008-topologia-red-vpc-vpce.md) — Topología de red VPC / VPC Endpoints
 - [ADR-0010](docs/adr/0010-rulesets-y-promotion-guard.md) — Rulesets + promotion-guard
@@ -77,6 +79,7 @@ Vista completa (red, datos y recorrido de un paquete): [docs/arquitectura.md](do
 
 | Servicio | Puerto | Tabla | Paso de la SAGA / compensación |
 |---|---|---|---|
+| `graphql-gateway` | 4000 | `aegisvolt-sagas-<env>` | Orquestador · `POST /graphql` y `ws://…/graphql` (subscriptions) |
 | `station-reservation-service` | 4001 | `aegisvolt-reservations-<env>` | 1 `POST /reservations` · C1 `POST /reservations/:sagaId/release` |
 | `billing-wallet-service` | 4002 | `aegisvolt-billing-<env>` | 2 `POST /holds` · C2 `POST /holds/:sagaId/refund` |
 | `energy-dispatch-service` | 4003 | `aegisvolt-dispatch-<env>` | 3 `POST /sessions` (falla con `SIMULATE_CHARGER_HARDWARE_FAULT`) |
@@ -86,7 +89,7 @@ Todos exponen `/health`, que revisa DynamoDB, `/health/live` y `/metrics`. Los p
 ```bash
 pnpm install
 pnpm build && pnpm test          # compila y corre las pruebas unitarias
-pnpm test:int                    # pruebas de integración contra Floci (tablas efímeras)
+pnpm test:int                    # integración contra Floci (tablas efímeras), incluida la SAGA completa
 
 # Un servicio contra las tablas de dev, con logs a CloudWatch
 APP_ENV=dev AWS_ENDPOINT_URL=http://localhost:4566 CLOUDWATCH_LOGS_ENABLED=true \
@@ -94,6 +97,20 @@ APP_ENV=dev AWS_ENDPOINT_URL=http://localhost:4566 CLOUDWATCH_LOGS_ENABLED=true 
 ```
 
 > En Windows, para ver bien las tildes del AWS CLI: `export AWS_CLI_OUTPUT_ENCODING=UTF-8`.
+
+## SAGA en docker compose
+
+```bash
+APP_ENV=test docker compose up -d --build      # Floci + gateway + 3 servicios sobre las tablas de test
+
+bash scripts/demo-saga.sh test ok              # reserve -> hold -> activate = COMPLETED
+bash scripts/demo-saga.sh test lowfunds        # hold 402 -> release = COMPENSATED
+bash scripts/demo-saga.sh test fault           # flag de fallo -> refund -> release = COMPENSATED
+
+bash scripts/trace-saga.sh <correlation_id> test   # la saga completa desde CloudWatch Logs
+```
+
+GraphQL: `http://localhost:4000/graphql`. La imagen de cada servicio sale del mismo [Dockerfile](Dockerfile) multi-stage (`--build-arg SERVICE=<servicio>`), con usuario no root, solo dependencias de producción y `HEALTHCHECK`.
 
 ## Feature flags (en caliente, sin redeploy)
 

@@ -5,6 +5,9 @@
   "description": "Saldo de la flota, retención y reembolso (paso 2 de la SAGA)",
   "type": "module",
   "main": "./dist/server.js",
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "lint": "tsc -p tsconfig.json --noEmit",
