@@ -66,11 +66,34 @@ docs/adr/               decisiones de arquitectura
 ## Decisiones de arquitectura
 
 - [ADR-0001](docs/adr/0001-floci-kind-como-nube-local.md) — Floci + kind como plataforma de ejecución
+- [ADR-0003](docs/adr/0003-idempotencia-escrituras-condicionales.md) — Idempotencia con escrituras condicionales en DynamoDB
 - [ADR-0007](docs/adr/0007-estado-terraform-s3-versionado-workspaces.md) — Estado en S3 versionado + workspaces
 - [ADR-0008](docs/adr/0008-topologia-red-vpc-vpce.md) — Topología de red VPC / VPC Endpoints
 - [ADR-0010](docs/adr/0010-rulesets-y-promotion-guard.md) — Rulesets + promotion-guard
 
 Vista completa (red, datos y recorrido de un paquete): [docs/arquitectura.md](docs/arquitectura.md)
+
+## Microservicios
+
+| Servicio | Puerto | Tabla | Paso de la SAGA / compensación |
+|---|---|---|---|
+| `station-reservation-service` | 4001 | `aegisvolt-reservations-<env>` | 1 `POST /reservations` · C1 `POST /reservations/:sagaId/release` |
+| `billing-wallet-service` | 4002 | `aegisvolt-billing-<env>` | 2 `POST /holds` · C2 `POST /holds/:sagaId/refund` |
+| `energy-dispatch-service` | 4003 | `aegisvolt-dispatch-<env>` | 3 `POST /sessions` (falla con `SIMULATE_CHARGER_HARDWARE_FAULT`) |
+
+Todos exponen `/health`, que revisa DynamoDB, `/health/live` y `/metrics`. Los pasos exigen `Idempotency-Key: <sagaId>:<step>` y propagan `x-correlation-id`.
+
+```bash
+pnpm install
+pnpm build && pnpm test          # compila y corre las pruebas unitarias
+pnpm test:int                    # pruebas de integración contra Floci (tablas efímeras)
+
+# Un servicio contra las tablas de dev, con logs a CloudWatch
+APP_ENV=dev AWS_ENDPOINT_URL=http://localhost:4566 CLOUDWATCH_LOGS_ENABLED=true \
+  node services/billing-wallet-service/dist/server.js
+```
+
+> En Windows, para ver bien las tildes del AWS CLI: `export AWS_CLI_OUTPUT_ENCODING=UTF-8`.
 
 ## Feature flags (en caliente, sin redeploy)
 

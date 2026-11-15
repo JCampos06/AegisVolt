@@ -2,6 +2,7 @@
   "name": "aegisvolt",
   "version": "0.1.0",
   "private": true,
+  "type": "module",
   "description": "AegisVolt — plataforma cloud-native de gestión de carga para flotas eléctricas (monorepo)",
   "packageManager": "pnpm@10.12.1",
   "engines": {
@@ -11,6 +12,7 @@
     "build": "pnpm -r build",
     "lint": "pnpm -r lint",
     "test": "pnpm -r test",
+    "test:int": "pnpm -r --workspace-concurrency=1 test:int",
     "floci:up": "docker compose up -d floci",
     "floci:verify": "bash scripts/verify-floci.sh"
   }
