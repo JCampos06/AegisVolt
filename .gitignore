@@ -52,6 +52,11 @@ override.tf.json
 terraform.rc
 # El lock file SÍ se versiona (.terraform.lock.hcl)
 
+# ---------- Docker ----------
+# Ajustes locales de compose (puertos, volúmenes propios); el base sí se versiona.
+docker-compose.override.yml
+compose.override.yml
+
 # ---------- Secretos / entorno ----------
 .env
 .env.*

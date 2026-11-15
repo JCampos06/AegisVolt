@@ -26,7 +26,8 @@ export interface EphemeralTable {
   drop(): Promise<void>;
 }
 
-export async function createEphemeralTable(prefix: string): Promise<EphemeralTable> {
+/** `statusIndex`: crea el GSI status-updatedAt-index (igual que la tabla de sagas en Terraform). */
+export async function createEphemeralTable(prefix: string, opts: { statusIndex?: boolean } = {}): Promise<EphemeralTable> {
   const client = new DynamoDBClient(awsClientOptions({ region: 'us-east-1', endpoint: INTEGRATION_ENDPOINT }));
   const doc = DynamoDBDocumentClient.from(client, { marshallOptions: { removeUndefinedValues: true } });
   const tableName = `it-${prefix}-${randomUUID().slice(0, 8)}`;
@@ -37,11 +38,31 @@ export async function createEphemeralTable(prefix: string): Promise<EphemeralTab
       AttributeDefinitions: [
         { AttributeName: 'PK', AttributeType: 'S' },
         { AttributeName: 'SK', AttributeType: 'S' },
+        ...(opts.statusIndex
+          ? [
+              { AttributeName: 'status', AttributeType: 'S' as const },
+              { AttributeName: 'updatedAt', AttributeType: 'S' as const },
+            ]
+          : []),
       ],
       KeySchema: [
         { AttributeName: 'PK', KeyType: 'HASH' },
         { AttributeName: 'SK', KeyType: 'RANGE' },
       ],
+      ...(opts.statusIndex
+        ? {
+            GlobalSecondaryIndexes: [
+              {
+                IndexName: 'status-updatedAt-index',
+                KeySchema: [
+                  { AttributeName: 'status', KeyType: 'HASH' },
+                  { AttributeName: 'updatedAt', KeyType: 'RANGE' },
+                ],
+                Projection: { ProjectionType: 'ALL' },
+              },
+            ],
+          }
+        : {}),
     }),
   );
   return {

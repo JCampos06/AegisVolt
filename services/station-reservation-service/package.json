@@ -5,6 +5,9 @@
   "description": "Estaciones, conectores y bloqueo temporal (paso 1 de la SAGA)",
   "type": "module",
   "main": "./dist/server.js",
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "lint": "tsc -p tsconfig.json --noEmit",

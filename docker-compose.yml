@@ -1,6 +1,23 @@
 # AegisVolt — entorno local
-# Día 1: solo Floci (emulador AWS). Los servicios, gateway y Prefect se agregan en días posteriores.
+#   docker compose up -d floci                       # solo el emulador AWS
+#   APP_ENV=test docker compose up -d --build        # emulador + gateway + 3 servicios contra las tablas de test
+# El ambiente (APP_ENV) elige las tablas aegisvolt-*-<env> y los log groups /aegisvolt/<env>/*.
 name: aegisvolt
+
+x-service: &service
+  restart: unless-stopped
+  depends_on:
+    floci:
+      condition: service_healthy
+  environment: &service-env
+    APP_ENV: ${APP_ENV:-dev}
+    APP_VERSION: ${IMAGE_TAG:-local}
+    AWS_ENDPOINT_URL: http://floci:4566
+    AWS_REGION: us-east-1
+    AWS_ACCESS_KEY_ID: test
+    AWS_SECRET_ACCESS_KEY: test
+    CLOUDWATCH_LOGS_ENABLED: "true"
+    LOG_LEVEL: ${LOG_LEVEL:-info}
 
 services:
   floci:
@@ -29,3 +46,43 @@ services:
       timeout: 5s
       retries: 12
     restart: unless-stopped
+
+  station-reservation-service:
+    <<: *service
+    image: aegisvolt/station-reservation-service:${IMAGE_TAG:-local}
+    build: { context: ., args: { SERVICE: station-reservation-service } }
+    environment: { <<: *service-env, PORT: "4001" }
+    ports: ["4001:4001"]
+
+  billing-wallet-service:
+    <<: *service
+    image: aegisvolt/billing-wallet-service:${IMAGE_TAG:-local}
+    build: { context: ., args: { SERVICE: billing-wallet-service } }
+    environment: { <<: *service-env, PORT: "4002" }
+    ports: ["4002:4002"]
+
+  energy-dispatch-service:
+    <<: *service
+    image: aegisvolt/energy-dispatch-service:${IMAGE_TAG:-local}
+    build: { context: ., args: { SERVICE: energy-dispatch-service } }
+    environment: { <<: *service-env, PORT: "4003" }
+    ports: ["4003:4003"]
+
+  graphql-gateway:
+    <<: *service
+    image: aegisvolt/graphql-gateway:${IMAGE_TAG:-local}
+    build: { context: ., args: { SERVICE: graphql-gateway } }
+    environment:
+      <<: *service-env
+      PORT: "4000"
+      RESERVATION_URL: http://station-reservation-service:4001
+      BILLING_URL: http://billing-wallet-service:4002
+      DISPATCH_URL: http://energy-dispatch-service:4003
+      # Solo obligatorio para setFeatureFlag en prod. Defínelo en .env (no versionado).
+      ADMIN_TOKEN: ${ADMIN_TOKEN:-}
+    depends_on:
+      floci: { condition: service_healthy }
+      station-reservation-service: { condition: service_healthy }
+      billing-wallet-service: { condition: service_healthy }
+      energy-dispatch-service: { condition: service_healthy }
+    ports: ["4000:4000"]
