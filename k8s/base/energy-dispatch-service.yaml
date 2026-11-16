@@ -1,0 +1,92 @@
+# Energy Dispatch Service (REST interno, puerto 4003).
+# Canary por réplicas: el gateway llama al Service "energy-dispatch-service",
+# que selecciona pods estables y canary; el peso sale de cuántos pods hay de cada
+# versión. El Service "-canary" solo apunta a la versión nueva (lo usa el análisis).
+apiVersion: argoproj.io/v1alpha1
+kind: Rollout
+metadata:
+  name: energy-dispatch-service
+  labels:
+    app.kubernetes.io/name: energy-dispatch-service
+    app.kubernetes.io/version: unset # lo reemplaza scripts/k8s-deploy.sh con el git-sha
+    aegisvolt/tier: internal
+  annotations:
+    aegisvolt/probe-method: GET
+    aegisvolt/probe-path: /sessions/canary-probe # 404 esperado: cuenta como sana (no 5xx)
+    aegisvolt/probe-body: ""
+spec:
+  replicas: 2
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: energy-dispatch-service
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: energy-dispatch-service
+        app.kubernetes.io/part-of: aegisvolt
+    spec:
+      automountServiceAccountToken: false
+      securityContext: { runAsNonRoot: true, runAsUser: 1000, seccompProfile: { type: RuntimeDefault } }
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels: { app.kubernetes.io/name: energy-dispatch-service }
+      containers:
+        - name: app
+          image: aegisvolt/energy-dispatch-service
+          env:
+            # Índice 0: scripts/k8s-deploy.sh lo reemplaza con el git-sha desplegado.
+            - { name: APP_VERSION, value: unset }
+            - { name: PORT, value: "4003" }
+          envFrom:
+            - configMapRef: { name: aegisvolt-config }
+          ports:
+            - { name: http, containerPort: 4003 }
+          readinessProbe:
+            httpGet: { path: /health, port: http }
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+          livenessProbe:
+            httpGet: { path: /health/live, port: http }
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 3
+          resources:
+            requests: { cpu: 50m, memory: 96Mi }
+            limits: { cpu: 500m, memory: 256Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: [ALL] }
+          volumeMounts:
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - { name: tmp, emptyDir: {} }
+  strategy:
+    canary:
+      canaryService: energy-dispatch-service-canary
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: energy-dispatch-service
+spec:
+  selector:
+    app.kubernetes.io/name: energy-dispatch-service
+  ports:
+    - { name: http, port: 80, targetPort: http }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: energy-dispatch-service-canary
+spec:
+  # Argo agrega aquí el pod-template-hash de la versión canary.
+  selector:
+    app.kubernetes.io/name: energy-dispatch-service
+  ports:
+    - { name: http, port: 80, targetPort: http }

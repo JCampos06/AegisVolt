@@ -1,0 +1,21 @@
+# Contexto de build mínimo: sin dependencias locales, artefactos ni secretos.
+**/node_modules
+**/dist
+**/coverage
+**/*.tsbuildinfo
+.git
+.github
+.floci
+.vscode
+.idea
+infra
+k8s
+docs
+scripts
+tests/e2e
+observability
+**/.env
+**/.env.*
+*.md
+!README.md
+*.log

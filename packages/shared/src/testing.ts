@@ -1,0 +1,83 @@
+import { randomUUID } from 'node:crypto';
+import { CreateTableCommand, DeleteTableCommand, DynamoDBClient } from '@aws-sdk/client-dynamodb';
+import { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
+import { awsClientOptions } from './aws.js';
+
+/**
+ * Utilidades para pruebas de integración contra Floci (DynamoDB real emulado).
+ * Cada suite crea su propia tabla efímera (PK/SK, igual que el módulo de
+ * Terraform) y la borra al terminar: no toca las tablas de dev/test/prod.
+ */
+export const INTEGRATION_ENDPOINT = process.env.AWS_ENDPOINT_URL ?? 'http://localhost:4566';
+
+/**
+ * true si el emulador responde (cualquier respuesta HTTP sirve). En local, sin
+ * Floci, las suites se saltan. Con REQUIRE_FLOCI=true (CI) la ausencia de Floci
+ * es un error: así un pipeline nunca queda "verde" sin haber probado nada.
+ */
+export async function flociAvailable(): Promise<boolean> {
+  try {
+    await fetch(INTEGRATION_ENDPOINT, { signal: AbortSignal.timeout(1000) });
+    return true;
+  } catch {
+    if (process.env.REQUIRE_FLOCI === 'true') {
+      throw new Error(`REQUIRE_FLOCI=true pero Floci no responde en ${INTEGRATION_ENDPOINT}`);
+    }
+    return false;
+  }
+}
+
+export interface EphemeralTable {
+  doc: DynamoDBDocumentClient;
+  tableName: string;
+  drop(): Promise<void>;
+}
+
+/** `statusIndex`: crea el GSI status-updatedAt-index (igual que la tabla de sagas en Terraform). */
+export async function createEphemeralTable(prefix: string, opts: { statusIndex?: boolean } = {}): Promise<EphemeralTable> {
+  const client = new DynamoDBClient(awsClientOptions({ region: 'us-east-1', endpoint: INTEGRATION_ENDPOINT }));
+  const doc = DynamoDBDocumentClient.from(client, { marshallOptions: { removeUndefinedValues: true } });
+  const tableName = `it-${prefix}-${randomUUID().slice(0, 8)}`;
+  await client.send(
+    new CreateTableCommand({
+      TableName: tableName,
+      BillingMode: 'PAY_PER_REQUEST',
+      AttributeDefinitions: [
+        { AttributeName: 'PK', AttributeType: 'S' },
+        { AttributeName: 'SK', AttributeType: 'S' },
+        ...(opts.statusIndex
+          ? [
+              { AttributeName: 'status', AttributeType: 'S' as const },
+              { AttributeName: 'updatedAt', AttributeType: 'S' as const },
+            ]
+          : []),
+      ],
+      KeySchema: [
+        { AttributeName: 'PK', KeyType: 'HASH' },
+        { AttributeName: 'SK', KeyType: 'RANGE' },
+      ],
+      ...(opts.statusIndex
+        ? {
+            GlobalSecondaryIndexes: [
+              {
+                IndexName: 'status-updatedAt-index',
+                KeySchema: [
+                  { AttributeName: 'status', KeyType: 'HASH' },
+                  { AttributeName: 'updatedAt', KeyType: 'RANGE' },
+                ],
+                Projection: { ProjectionType: 'ALL' },
+              },
+            ],
+          }
+        : {}),
+    }),
+  );
+  return {
+    doc,
+    tableName,
+    drop: async () => {
+      await client.send(new DeleteTableCommand({ TableName: tableName }));
+      client.destroy();
+    },
+  };
+}
