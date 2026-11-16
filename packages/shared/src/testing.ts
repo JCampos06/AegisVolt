@@ -10,12 +10,19 @@ import { awsClientOptions } from './aws.js';
  */
 export const INTEGRATION_ENDPOINT = process.env.AWS_ENDPOINT_URL ?? 'http://localhost:4566';
 
-/** true si el emulador responde (cualquier respuesta HTTP sirve). */
+/**
+ * true si el emulador responde (cualquier respuesta HTTP sirve). En local, sin
+ * Floci, las suites se saltan. Con REQUIRE_FLOCI=true (CI) la ausencia de Floci
+ * es un error: así un pipeline nunca queda "verde" sin haber probado nada.
+ */
 export async function flociAvailable(): Promise<boolean> {
   try {
     await fetch(INTEGRATION_ENDPOINT, { signal: AbortSignal.timeout(1000) });
     return true;
   } catch {
+    if (process.env.REQUIRE_FLOCI === 'true') {
+      throw new Error(`REQUIRE_FLOCI=true pero Floci no responde en ${INTEGRATION_ENDPOINT}`);
+    }
     return false;
   }
 }

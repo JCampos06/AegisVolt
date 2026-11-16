@@ -1,0 +1,135 @@
+# -----------------------------------------------------------------------------
+# AnalysisTemplate del canary (uno por namespace, lo usan los 4 Rollouts).
+#
+# Tres métricas que corren en paralelo durante cada paso de análisis:
+#   1. probe-traffic   (Job)  genera tráfico real contra el Service canary, para
+#                             que las métricas midan algo aunque nadie use la app.
+#   2. success-rate    (web)  lee /metrics.json del pod canary: respuestas no-5xx
+#                             / total. Debe ser >= 95%.
+#   3. cloudwatch-5xx  (Job)  suma la métrica Http5xx (metric filter del log group
+#                             /aegisvolt/<env>/<service>, dimensión Version = canary)
+#                             en los últimos 10 min. Falla si hay más de 5.
+#
+# Si success-rate o cloudwatch-5xx fallan, el Rollout se aborta y vuelve al 100%
+# estable. Las dos fuentes son independientes: una mide en el pod, la otra en la
+# plataforma de observabilidad del ambiente.
+# -----------------------------------------------------------------------------
+apiVersion: argoproj.io/v1alpha1
+kind: AnalysisTemplate
+metadata:
+  name: canary-analysis
+spec:
+  args:
+    - name: service
+    - name: version
+    - name: env
+    - name: namespace
+    - name: probe-method
+      value: GET
+    - name: probe-path
+      value: /health/live
+    - name: probe-body
+      value: ""
+    - name: probe-requests
+      value: "60"
+    - name: max-5xx
+      value: "5"
+
+  metrics:
+    - name: probe-traffic
+      provider:
+        job:
+          spec:
+            backoffLimit: 0
+            activeDeadlineSeconds: 120
+            ttlSecondsAfterFinished: 600
+            template:
+              spec:
+                restartPolicy: Never
+                securityContext: { runAsNonRoot: true, runAsUser: 100, seccompProfile: { type: RuntimeDefault } }
+                containers:
+                  - name: probe
+                    image: curlimages/curl:8.11.1
+                    securityContext: { allowPrivilegeEscalation: false, capabilities: { drop: [ALL] } }
+                    resources:
+                      requests: { cpu: 10m, memory: 16Mi }
+                      limits: { cpu: 100m, memory: 32Mi }
+                    env:
+                      - { name: URL, value: "http://{{args.service}}-canary.{{args.namespace}}.svc.cluster.local{{args.probe-path}}" }
+                      - { name: METHOD, value: "{{args.probe-method}}" }
+                      - { name: BODY, value: "{{args.probe-body}}" }
+                      - { name: REQUESTS, value: "{{args.probe-requests}}" }
+                    command: ["/bin/sh", "-c"]
+                    args:
+                      - |
+                        ok=0; fail=0; i=0
+                        echo "probe $METHOD $URL x$REQUESTS"
+                        while [ "$i" -lt "$REQUESTS" ]; do
+                          i=$((i+1))
+                          if [ -n "$BODY" ]; then
+                            code=$(curl -s -o /dev/null -w '%{http_code}' -m 5 -X "$METHOD" \
+                              -H 'content-type: application/json' -H 'x-correlation-id: canary-probe' --data "$BODY" "$URL")
+                          else
+                            code=$(curl -s -o /dev/null -w '%{http_code}' -m 5 -X "$METHOD" \
+                              -H 'x-correlation-id: canary-probe' "$URL")
+                          fi
+                          case "$code" in 5*|000) fail=$((fail+1)) ;; *) ok=$((ok+1)) ;; esac
+                          sleep 0.5
+                        done
+                        echo "respuestas ok=$ok 5xx/sin-respuesta=$fail"
+                        # Solo genera tráfico: la decisión la toman success-rate y cloudwatch-5xx.
+
+    - name: success-rate
+      initialDelay: 20s
+      interval: 10s
+      count: 3
+      failureLimit: 0
+      successCondition: result >= 0.95
+      provider:
+        web:
+          url: "http://{{args.service}}-canary.{{args.namespace}}.svc.cluster.local/metrics.json"
+          timeoutSeconds: 5
+          jsonPath: "{$.successRate}"
+
+    - name: cloudwatch-5xx
+      initialDelay: 40s
+      provider:
+        job:
+          spec:
+            backoffLimit: 0
+            activeDeadlineSeconds: 120
+            ttlSecondsAfterFinished: 600
+            template:
+              spec:
+                restartPolicy: Never
+                containers:
+                  - name: cloudwatch
+                    image: amazon/aws-cli:2.40.3
+                    securityContext: { allowPrivilegeEscalation: false, capabilities: { drop: [ALL] } }
+                    resources:
+                      requests: { cpu: 10m, memory: 64Mi }
+                      limits: { cpu: 300m, memory: 256Mi }
+                    envFrom:
+                      - configMapRef: { name: aegisvolt-config }
+                    env:
+                      # Floci acepta cualquier credencial. En AWS real: IRSA (sin claves).
+                      - { name: AWS_ACCESS_KEY_ID, value: test }
+                      - { name: AWS_SECRET_ACCESS_KEY, value: test }
+                      - { name: SERVICE, value: "{{args.service}}" }
+                      - { name: VERSION, value: "{{args.version}}" }
+                      - { name: NAMESPACE_CW, value: "AegisVolt/{{args.env}}" }
+                      - { name: MAX_5XX, value: "{{args.max-5xx}}" }
+                    command: ["/bin/sh", "-c"]
+                    args:
+                      - |
+                        set -eu
+                        start=$(date -u -d '-10 min' +%Y-%m-%dT%H:%M:%SZ)
+                        end=$(date -u -d '+1 min' +%Y-%m-%dT%H:%M:%SZ)
+                        total=$(aws cloudwatch get-metric-statistics \
+                          --namespace "$NAMESPACE_CW" --metric-name Http5xx \
+                          --dimensions Name=Service,Value="$SERVICE" Name=Version,Value="$VERSION" \
+                          --start-time "$start" --end-time "$end" --period 60 --statistics Sum \
+                          --query 'sum(Datapoints[].Sum)' --output text)
+                        total=${total%.*}
+                        echo "Http5xx $NAMESPACE_CW service=$SERVICE version=$VERSION (10 min) = $total (máximo $MAX_5XX)"
+                        [ "$total" -le "$MAX_5XX" ] || { echo "Demasiados 5xx: canary rechazado"; exit 1; }

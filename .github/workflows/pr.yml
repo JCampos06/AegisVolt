@@ -1,5 +1,18 @@
+# -----------------------------------------------------------------------------
 # Pipeline pre-merge (Pull Request hacia dev / test / prod).
-# Día 1: promotion-guard. Día 5: lint-build, unit, integration, e2e y terraform-plan.
+#
+#   promotion-guard    feature/* -> dev -> test -> prod (nada se salta un ambiente)
+#   lint-build         tsc (tipos), build de los paquetes, kustomize de los 3
+#                      overlays y docker build de las 4 imágenes
+#   unit-tests         Vitest (SAGA, compensaciones, idempotencia, pricing)
+#   integration-tests  Floci efímero como service container + Vitest contra DynamoDB
+#   terraform-plan     self-hosted runner (Floci persistente del PC): plan del
+#                      workspace = rama destino, publicado como artifact y comentario
+#
+# El job e2e-tests (Playwright) se agrega el Día 6 junto con el frontend.
+# Todos los nombres de job son los "required status checks" del ruleset
+# protected-envs (.github/rulesets/protected-envs.json).
+# -----------------------------------------------------------------------------
 name: pr
 
 on:
@@ -8,6 +21,13 @@ on:
 
 permissions:
   contents: read
+
+concurrency:
+  group: pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: "24"
 
 jobs:
   promotion-guard:
@@ -34,3 +54,122 @@ jobs:
               echo "::error::Rama destino no gestionada: $BASE"; exit 1 ;;
           esac
           echo "Promoción válida."
+
+  lint-build:
+    name: lint-build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4 # versión desde "packageManager" de package.json
+      - uses: actions/setup-node@v4
+        with: { node-version: "${{ env.NODE_VERSION }}", cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - name: Build (shared primero, orden topológico)
+        run: pnpm -r build
+      - name: Tipos (tsc --noEmit en todos los paquetes)
+        run: pnpm -r lint
+      - name: Manifiestos Kubernetes (kustomize de los 3 overlays)
+        run: |
+          for env in dev test prod; do
+            echo "::group::overlay $env"
+            kubectl kustomize "k8s/overlays/$env" > "/tmp/$env.yaml"
+            grep -c '^kind: Rollout' "/tmp/$env.yaml"
+            grep -q "namespace: aegisvolt-$env" "/tmp/$env.yaml"
+            echo "::endgroup::"
+          done
+      - name: Docker build de las 4 imágenes
+        run: |
+          for svc in station-reservation-service billing-wallet-service energy-dispatch-service graphql-gateway; do
+            echo "::group::$svc"
+            docker build --build-arg SERVICE="$svc" --build-arg APP_VERSION="${GITHUB_SHA::12}" \
+              -t "aegisvolt/$svc:${GITHUB_SHA::12}" .
+            echo "::endgroup::"
+          done
+
+  unit-tests:
+    name: unit-tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4 # versión desde "packageManager" de package.json
+      - uses: actions/setup-node@v4
+        with: { node-version: "${{ env.NODE_VERSION }}", cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm -r test
+
+  integration-tests:
+    name: integration-tests
+    runs-on: ubuntu-latest
+    services:
+      # Floci efímero (en memoria): cada suite crea y borra sus propias tablas.
+      floci:
+        image: floci/floci:2.4.0-compat
+        ports: ["4566:4566"]
+        env:
+          FLOCI_DEFAULT_REGION: us-east-1
+          AWS_ACCESS_KEY_ID: test
+          AWS_SECRET_ACCESS_KEY: test
+          AWS_DEFAULT_REGION: us-east-1
+        options: >-
+          --health-cmd "aws --endpoint-url http://localhost:4566 sts get-caller-identity"
+          --health-interval 5s --health-timeout 5s --health-retries 24
+    env:
+      AWS_ENDPOINT_URL: http://localhost:4566
+      AWS_REGION: us-east-1
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      REQUIRE_FLOCI: "true" # si Floci no responde, falla (no se salta)
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4 # versión desde "packageManager" de package.json
+      - uses: actions/setup-node@v4
+        with: { node-version: "${{ env.NODE_VERSION }}", cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm test:int
+
+  terraform-plan:
+    name: terraform-plan
+    # Repo público: el runner del PC nunca ejecuta código de forks.
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: [self-hosted, aegisvolt]
+    permissions:
+      contents: read
+      pull-requests: write
+    defaults:
+      run:
+        shell: bash
+    env:
+      # Detección dinámica del ambiente: el workspace es la rama destino del PR.
+      ENV: ${{ github.base_ref }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: terraform init + workspace select ${{ github.base_ref }}
+        run: |
+          bash scripts/tf.sh infra init -input=false -no-color
+          bash scripts/tf.sh infra workspace select "$ENV"
+      - name: terraform plan (env/${{ github.base_ref }}.tfvars)
+        run: |
+          set -o pipefail
+          bash scripts/tf.sh infra plan -input=false -no-color -lock-timeout=60s \
+            -var-file="env/$ENV.tfvars" -out=tfplan | tee plan.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: terraform-plan-${{ github.base_ref }}
+          path: plan.txt
+          retention-days: 7
+      - name: Comentar el plan en el PR
+        run: |
+          {
+            echo "### terraform plan — workspace \`$ENV\`"
+            echo
+            grep -E '^(Plan:|No changes\.)' plan.txt || echo "(ver artifact)"
+            echo
+            echo '<details><summary>Plan completo</summary>'
+            echo
+            echo '```'
+            tail -c 60000 plan.txt
+            echo '```'
+            echo '</details>'
+          } > comment.md
+          gh pr comment "${{ github.event.pull_request.number }}" --body-file comment.md
