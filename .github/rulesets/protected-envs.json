@@ -29,7 +29,11 @@
         "strict_required_status_checks_policy": false,
         "do_not_enforce_on_create": false,
         "required_status_checks": [
-          { "context": "promotion-guard" }
+          { "context": "promotion-guard" },
+          { "context": "lint-build" },
+          { "context": "unit-tests" },
+          { "context": "integration-tests" },
+          { "context": "terraform-plan" }
         ]
       }
     }

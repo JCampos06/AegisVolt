@@ -69,6 +69,7 @@ docs/adr/               decisiones de arquitectura
 - [ADR-0002](docs/adr/0002-saga-orquestada-en-gateway.md) — SAGA orquestada dentro del gateway
 - [ADR-0003](docs/adr/0003-idempotencia-escrituras-condicionales.md) — Idempotencia con escrituras condicionales en DynamoDB
 - [ADR-0005](docs/adr/0005-graphql-bff-y-rest-interno.md) — GraphQL como BFF y REST interno
+- [ADR-0006](docs/adr/0006-canary-argo-rollouts.md) — Canary con Argo Rollouts, NGINX y análisis automático
 - [ADR-0007](docs/adr/0007-estado-terraform-s3-versionado-workspaces.md) — Estado en S3 versionado + workspaces
 - [ADR-0008](docs/adr/0008-topologia-red-vpc-vpce.md) — Topología de red VPC / VPC Endpoints
 - [ADR-0010](docs/adr/0010-rulesets-y-promotion-guard.md) — Rulesets + promotion-guard
@@ -118,3 +119,30 @@ GraphQL: `http://localhost:4000/graphql`. La imagen de cada servicio sale del mi
 bash scripts/toggle-flag.sh dev                                      # lista las flags de dev
 bash scripts/toggle-flag.sh test SIMULATE_CHARGER_HARDWARE_FAULT true
 ```
+
+## Kubernetes (kind + Argo Rollouts)
+
+```bash
+bash scripts/kind-up.sh                                   # clúster, registro, Floci en la red kind, ingress en el control-plane
+bash scripts/k8s-deploy.sh dev                            # build :<git-sha> -> push -> apply -k -> canary -> smoke test
+kubectl argo rollouts get rollout graphql-gateway -n aegisvolt-dev -w
+
+# Demo de rollback automático (≈30% de 500 en la versión nueva)
+bash scripts/k8s-deploy.sh test --faulty billing-wallet-service
+bash scripts/k8s-deploy.sh test                           # vuelve a la versión sana
+
+bash scripts/smoke-k8s.sh test                            # GraphQL por el Ingress: http://test.aegisvolt.localhost:8080/graphql
+```
+
+`k8s/base` tiene los 4 Rollouts, los Services estable y canary, el Ingress y el AnalysisTemplate. `k8s/overlays/<env>` define el namespace, `APP_ENV`, las réplicas (dev 2, test 3, prod 5; el gateway siempre 1) y el host.
+
+El canary avanza **20% → 50% → 100%**. En cada paso corre un análisis que exige un *success-rate* ≥ 95% (`/metrics.json` del pod canary) y como máximo 5 errores 5xx en CloudWatch para esa versión. Si falla, Argo vuelve solo a la versión estable ([ADR-0006](docs/adr/0006-canary-argo-rollouts.md)).
+
+## CI/CD
+
+| Workflow | Disparo | Jobs |
+|---|---|---|
+| [pr.yml](.github/workflows/pr.yml) | PR a dev, test o prod | `promotion-guard`, `lint-build`, `unit-tests`, `integration-tests` (Floci efímero), `terraform-plan` (self-hosted) |
+| [deploy.yml](.github/workflows/deploy.yml) | push (merge) a dev, test o prod | `ENV=${GITHUB_REF_NAME}`: terraform apply del workspace, imágenes `:<sha>`, canary y smoke test (self-hosted) |
+
+Para configurar el runner del PC, ver [docs/self-hosted-runner.md](docs/self-hosted-runner.md).

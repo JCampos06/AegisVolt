@@ -2,6 +2,7 @@
 PLAN.md
 agente-patrones-avanzados.md
 Proyecto Final - Patrones Arquitectónicos Avanzados (AegisVolt).md
+GUIA-PASO-A-PASO.md
 
 # ---------- Node / TypeScript ----------
 node_modules/
@@ -84,3 +85,7 @@ desktop.ini
 # ---------- Logs ----------
 logs/
 *.log
+
+# ---------- Kubernetes ----------
+# Overlay generado por scripts/k8s-deploy.sh (imagen <git-sha> por ambiente)
+k8s/.deploy/

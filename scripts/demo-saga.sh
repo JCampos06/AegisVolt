@@ -22,11 +22,28 @@ case "$SCENARIO" in
 esac
 
 gql() { # gql '<query>' '<variables json>'
+  # node:http en vez de fetch: permite ir a 127.0.0.1 con el header Host cuando la URL
+  # es <env>.aegisvolt.localhost (Ingress de kind); Windows no resuelve *.localhost.
   node -e '
+    const http = require("node:http");
     const [url, query, vars] = process.argv.slice(1);
-    fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ query, variables: JSON.parse(vars) }) })
-      .then(r => r.json()).then(j => { if (j.errors) { console.error(JSON.stringify(j.errors, null, 2)); process.exit(1); } console.log(JSON.stringify(j.data)); })
-      .catch(e => { console.error("Gateway no disponible en " + url + ": " + e.message); process.exit(1); });' "$URL" "$1" "${2:-{\}}"
+    const u = new URL(url);
+    const body = JSON.stringify({ query, variables: JSON.parse(vars) });
+    const fail = (m) => { console.error("Gateway no disponible en " + url + ": " + m); process.exit(1); };
+    const req = http.request({
+      hostname: u.hostname.endsWith(".localhost") ? "127.0.0.1" : u.hostname,
+      port: u.port || 80, path: u.pathname + u.search, method: "POST",
+      headers: { host: u.host, "content-type": "application/json", "content-length": Buffer.byteLength(body) },
+    }, (res) => {
+      let data = ""; res.on("data", (c) => (data += c));
+      res.on("end", () => {
+        let j; try { j = JSON.parse(data); } catch { fail("HTTP " + res.statusCode + " " + data.slice(0, 200)); }
+        if (j.errors) { console.error(JSON.stringify(j.errors, null, 2)); process.exit(1); }
+        console.log(JSON.stringify(j.data));
+      });
+    });
+    req.on("error", (e) => fail(e.message));
+    req.end(body);' "$URL" "$1" "${2:-{\}}"
 }
 
 ACTUAL_ENV=$(gql '{ environment }' | node -pe 'JSON.parse(require("fs").readFileSync(0)).environment')

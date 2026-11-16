@@ -1,0 +1,65 @@
+# -----------------------------------------------------------------------------
+# Despliegue continuo: push a dev / test / prod (solo ocurre vía merge de PR,
+# el ruleset protected-envs bloquea el push directo).
+#
+# Detección dinámica del ambiente: ENV = nombre de la rama (GITHUB_REF_NAME).
+#   1. terraform workspace select $ENV && terraform apply -var-file=env/$ENV.tfvars
+#   2. build + push de las imágenes :<git-sha> al registro local (localhost:5001)
+#   3. kubectl apply -k (overlay del ambiente + imagen exacta) -> Argo Rollouts
+#      hace el canary 20 -> 50 -> 100 con análisis automático
+#   4. si Argo aborta el canary (Degraded) el job falla; el rollback ya lo hizo Argo
+#   5. smoke test GraphQL por el Ingress NGINX
+#
+# Corre en el self-hosted runner (PC con Floci + kind). Ver docs/self-hosted-runner.md
+# -----------------------------------------------------------------------------
+name: deploy
+
+on:
+  push:
+    branches: [dev, test, prod]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+# Un solo clúster, un solo registro y un solo Floci: los despliegues van en fila.
+concurrency:
+  group: deploy-local
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: deploy (${{ github.ref_name }})
+    runs-on: [self-hosted, aegisvolt]
+    environment: ${{ github.ref_name }}
+    timeout-minutes: 40
+    defaults:
+      run:
+        shell: bash
+    env:
+      ENV: ${{ github.ref_name }}
+      TF_IN_AUTOMATION: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validar ambiente
+        run: |
+          case "$ENV" in dev|test|prod) echo "Ambiente: $ENV" ;; *) echo "::error::Rama no desplegable: $ENV"; exit 1 ;; esac
+
+      - name: Terraform apply (workspace ${{ github.ref_name }})
+        run: |
+          bash scripts/tf.sh infra init -input=false -no-color
+          bash scripts/tf.sh infra workspace select "$ENV"
+          bash scripts/tf.sh infra apply -input=false -no-color -auto-approve -lock-timeout=60s \
+            -var-file="env/$ENV.tfvars"
+
+      - name: Build, push y canary en aegisvolt-${{ github.ref_name }}
+        env:
+          TAG: ${{ github.sha }}
+        run: bash scripts/k8s-deploy.sh "$ENV" --tag "${TAG::12}"
+
+      - name: Estado final de los Rollouts
+        if: always()
+        run: |
+          export PATH="$PATH:$HOME/.local/bin"
+          kubectl --context kind-aegisvolt -n "aegisvolt-$ENV" get rollouts,pods -o wide || true
