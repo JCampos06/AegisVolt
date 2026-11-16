@@ -1,0 +1,36 @@
+# Overlay de test: mismo código y manifiestos que los demás ambientes; solo cambia
+# el namespace, APP_ENV (tablas aegisvolt-*-test y log groups /aegisvolt/test/*),
+# las réplicas y el host del Ingress.
+#   Desplegar: bash scripts/k8s-deploy.sh test    (fija la imagen <git-sha>)
+#   Ver YAML:  kubectl kustomize k8s/overlays/test
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: aegisvolt-test
+
+labels:
+  - pairs:
+      aegisvolt/env: test
+
+resources:
+  - ../../base
+
+configMapGenerator:
+  - name: aegisvolt-config
+    behavior: merge
+    literals:
+      - APP_ENV=test
+      - LOG_LEVEL=info
+
+# Servicios internos: 3 réplicas. El gateway se queda en 1 (PubSub en memoria).
+replicas:
+  - { name: station-reservation-service, count: 3 }
+  - { name: billing-wallet-service, count: 3 }
+  - { name: energy-dispatch-service, count: 3 }
+
+patches:
+  - target: { kind: Ingress, name: graphql-gateway }
+    patch: |-
+      - op: replace
+        path: /spec/rules/0/host
+        value: test.aegisvolt.localhost

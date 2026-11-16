@@ -1,0 +1,40 @@
+# Enseña a Kustomize las referencias de nombre dentro de un Rollout (CRD de Argo),
+# igual que hace con un Deployment. Las imágenes (spec/template/spec/containers)
+# ya las reconoce para cualquier kind. Basado en
+# https://argoproj.github.io/argo-rollouts/features/kustomize/
+nameReference:
+  - kind: ConfigMap
+    version: v1
+    fieldSpecs:
+      - path: spec/template/spec/containers/envFrom/configMapRef/name
+        kind: Rollout
+      - path: spec/template/spec/containers/env/valueFrom/configMapKeyRef/name
+        kind: Rollout
+  - kind: Secret
+    version: v1
+    fieldSpecs:
+      - path: spec/template/spec/containers/env/valueFrom/secretKeyRef/name
+        kind: Rollout
+  - kind: Service
+    version: v1
+    fieldSpecs:
+      - path: spec/strategy/canary/canaryService
+        kind: Rollout
+      - path: spec/strategy/canary/stableService
+        kind: Rollout
+  - kind: Ingress
+    version: v1
+    fieldSpecs:
+      - path: spec/strategy/canary/trafficRouting/nginx/stableIngress
+        kind: Rollout
+  - kind: AnalysisTemplate
+    version: v1alpha1
+    group: argoproj.io
+    fieldSpecs:
+      - path: spec/strategy/canary/steps/analysis/templates/templateName
+        kind: Rollout
+
+# Permite usar `replicas:` en los overlays sobre un Rollout.
+replicas:
+  - path: spec/replicas
+    kind: Rollout

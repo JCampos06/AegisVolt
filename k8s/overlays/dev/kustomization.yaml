@@ -1,0 +1,36 @@
+# Overlay de dev: mismo código y manifiestos que los demás ambientes; solo cambia
+# el namespace, APP_ENV (tablas aegisvolt-*-dev y log groups /aegisvolt/dev/*),
+# las réplicas y el host del Ingress.
+#   Desplegar: bash scripts/k8s-deploy.sh dev    (fija la imagen <git-sha>)
+#   Ver YAML:  kubectl kustomize k8s/overlays/dev
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: aegisvolt-dev
+
+labels:
+  - pairs:
+      aegisvolt/env: dev
+
+resources:
+  - ../../base
+
+configMapGenerator:
+  - name: aegisvolt-config
+    behavior: merge
+    literals:
+      - APP_ENV=dev
+      - LOG_LEVEL=debug
+
+# Servicios internos: 2 réplicas. El gateway se queda en 1 (PubSub en memoria).
+replicas:
+  - { name: station-reservation-service, count: 2 }
+  - { name: billing-wallet-service, count: 2 }
+  - { name: energy-dispatch-service, count: 2 }
+
+patches:
+  - target: { kind: Ingress, name: graphql-gateway }
+    patch: |-
+      - op: replace
+        path: /spec/rules/0/host
+        value: dev.aegisvolt.localhost

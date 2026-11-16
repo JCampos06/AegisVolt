@@ -1,0 +1,36 @@
+# Overlay de prod: mismo código y manifiestos que los demás ambientes; solo cambia
+# el namespace, APP_ENV (tablas aegisvolt-*-prod y log groups /aegisvolt/prod/*),
+# las réplicas y el host del Ingress.
+#   Desplegar: bash scripts/k8s-deploy.sh prod    (fija la imagen <git-sha>)
+#   Ver YAML:  kubectl kustomize k8s/overlays/prod
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: aegisvolt-prod
+
+labels:
+  - pairs:
+      aegisvolt/env: prod
+
+resources:
+  - ../../base
+
+configMapGenerator:
+  - name: aegisvolt-config
+    behavior: merge
+    literals:
+      - APP_ENV=prod
+      - LOG_LEVEL=info
+
+# Servicios internos: 5 réplicas. El gateway se queda en 1 (PubSub en memoria).
+replicas:
+  - { name: station-reservation-service, count: 5 }
+  - { name: billing-wallet-service, count: 5 }
+  - { name: energy-dispatch-service, count: 5 }
+
+patches:
+  - target: { kind: Ingress, name: graphql-gateway }
+    patch: |-
+      - op: replace
+        path: /spec/rules/0/host
+        value: prod.aegisvolt.localhost
