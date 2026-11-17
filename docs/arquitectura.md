@@ -12,7 +12,7 @@
 
 | Contenedor | Tecnología | Datos propios |
 |---|---|---|
-| Frontend | React + Vite | — |
+| Frontend (panel de operación) | React + Vite + Apollo · nginx sin root | — (habla solo GraphQL con el gateway, mismo host; ver [frontend.md](frontend.md)) |
 | API Gateway HTTP API (stage = env) | AWS APIGW v2 | Access logs `/aegisvolt/<env>/apigateway` |
 | graphql-gateway (BFF + orquestador SAGA) | Node 24 · Apollo | `aegisvolt-sagas-<env>`, `aegisvolt-flags-<env>` (lectura/escritura) |
 | station-reservation-service | Node 24 · Fastify | `aegisvolt-reservations-<env>` |

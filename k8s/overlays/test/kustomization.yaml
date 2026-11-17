@@ -29,7 +29,8 @@ replicas:
   - { name: energy-dispatch-service, count: 3 }
 
 patches:
-  - target: { kind: Ingress, name: graphql-gateway }
+  # Host de los dos Ingress del ambiente (frontend "/" y graphql-gateway "/graphql").
+  - target: { kind: Ingress }
     patch: |-
       - op: replace
         path: /spec/rules/0/host

@@ -1,0 +1,175 @@
+# -----------------------------------------------------------------------------
+# frontend: SPA React servida por nginx (sin root, FS de solo lectura).
+#
+# Mismo host que el gateway (<env>.aegisvolt.localhost): el Ingress "frontend"
+# atiende "/" y el Ingress "graphql-gateway" atiende "/graphql". Así la UI usa
+# /graphql relativo y la misma imagen sirve en los 3 ambientes.
+#
+# Canary con NGINX por peso, como el gateway, pero con su propio análisis
+# (frontend-analysis): nginx no expone /metrics.json ni escribe en CloudWatch.
+# -----------------------------------------------------------------------------
+apiVersion: argoproj.io/v1alpha1
+kind: Rollout
+metadata:
+  name: frontend
+  labels:
+    app.kubernetes.io/name: frontend
+    app.kubernetes.io/version: unset # lo reemplaza scripts/k8s-deploy.sh con el git-sha
+    aegisvolt/tier: ui
+spec:
+  replicas: 2
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: frontend
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: frontend
+        app.kubernetes.io/part-of: aegisvolt
+    spec:
+      automountServiceAccountToken: false
+      securityContext: { runAsNonRoot: true, runAsUser: 101, runAsGroup: 101, seccompProfile: { type: RuntimeDefault } }
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels: { app.kubernetes.io/name: frontend }
+      containers:
+        - name: app
+          image: aegisvolt/frontend
+          env:
+            # Índice 0: scripts/k8s-deploy.sh lo reemplaza con el git-sha desplegado.
+            - { name: APP_VERSION, value: unset }
+            # Solo se usa si una petición /graphql llega a nginx (acceso directo al Service).
+            - { name: GRAPHQL_UPSTREAM, value: http://graphql-gateway }
+          ports:
+            - { name: http, containerPort: 8080 }
+          readinessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests: { cpu: 20m, memory: 32Mi }
+            limits: { cpu: 200m, memory: 96Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: [ALL] }
+          volumeMounts:
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - { name: tmp, emptyDir: {} }
+  strategy:
+    canary:
+      stableService: frontend
+      canaryService: frontend-canary
+      trafficRouting:
+        nginx:
+          stableIngress: frontend
+      steps:
+        - setWeight: 20
+        - pause: { duration: 30s }
+        - analysis: &analysis
+            templates:
+              - templateName: frontend-analysis
+            args:
+              - name: namespace
+                valueFrom: { fieldRef: { fieldPath: metadata.namespace } }
+        - setWeight: 50
+        - pause: { duration: 30s }
+        - analysis: *analysis
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: frontend
+spec:
+  selector:
+    app.kubernetes.io/name: frontend
+  ports:
+    - { name: http, port: 80, targetPort: http }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: frontend-canary
+spec:
+  selector:
+    app.kubernetes.io/name: frontend
+  ports:
+    - { name: http, port: 80, targetPort: http }
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: frontend
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: dev.aegisvolt.localhost
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: frontend
+                port: { name: http }
+---
+# Análisis del canary del frontend: la versión nueva debe servir la SPA completa
+# (index.html con la raíz de React, un asset con hash y /healthz) sin un solo error.
+apiVersion: argoproj.io/v1alpha1
+kind: AnalysisTemplate
+metadata:
+  name: frontend-analysis
+spec:
+  args:
+    - name: namespace
+    - name: requests
+      value: "40"
+  metrics:
+    - name: ui-probe
+      provider:
+        job:
+          spec:
+            backoffLimit: 0
+            activeDeadlineSeconds: 120
+            ttlSecondsAfterFinished: 600
+            template:
+              spec:
+                restartPolicy: Never
+                securityContext: { runAsNonRoot: true, runAsUser: 100, seccompProfile: { type: RuntimeDefault } }
+                containers:
+                  - name: probe
+                    image: curlimages/curl:8.11.1
+                    securityContext: { allowPrivilegeEscalation: false, capabilities: { drop: [ALL] } }
+                    resources:
+                      requests: { cpu: 10m, memory: 16Mi }
+                      limits: { cpu: 100m, memory: 32Mi }
+                    env:
+                      - { name: BASE, value: "http://frontend-canary.{{args.namespace}}.svc.cluster.local" }
+                      - { name: REQUESTS, value: "{{args.requests}}" }
+                    command: ["/bin/sh", "-c"]
+                    args:
+                      - |
+                        set -u
+                        index="$(curl -sf -m 5 "$BASE/")" || { echo "index.html no responde"; exit 1; }
+                        echo "$index" | grep -q '<div id="root">' || { echo "index.html sin la raíz de la SPA"; exit 1; }
+                        asset="$(echo "$index" | grep -o '/assets/index-[^"]*\.js' | head -n1)"
+                        [ -n "$asset" ] || { echo "index.html no referencia el bundle"; exit 1; }
+                        fail=0; i=0
+                        while [ "$i" -lt "$REQUESTS" ]; do
+                          i=$((i+1))
+                          for path in / /healthz "$asset" /historial; do
+                            code=$(curl -s -o /dev/null -w '%{http_code}' -m 5 "$BASE$path")
+                            [ "$code" = "200" ] || { fail=$((fail+1)); echo "$path -> $code"; }
+                          done
+                          sleep 0.25
+                        done
+                        echo "peticiones: $((REQUESTS*4)), errores: $fail"
+                        [ "$fail" -eq 0 ]
