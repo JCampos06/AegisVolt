@@ -1,0 +1,2 @@
+# prefect y httpx vienen en la imagen base (prefecthq/prefect:3.9.1-python3.12)
+boto3~=1.40

@@ -1,0 +1,17 @@
+{
+  "name": "@aegisvolt/e2e-tests",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Pruebas end-to-end con Playwright: la UI real contra el gateway y los servicios (docker compose o kind)",
+  "type": "module",
+  "scripts": {
+    "lint": "tsc -p tsconfig.json --noEmit",
+    "e2e": "playwright test",
+    "e2e:install": "playwright install chromium"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.65.1",
+    "@types/node": "^24.19.2",
+    "typescript": "^6.0.3"
+  }
+}

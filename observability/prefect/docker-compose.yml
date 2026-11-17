@@ -1,0 +1,62 @@
+# Prefect 3 para AegisVolt: servidor (UI en http://localhost:4200) + worker.
+#
+#   docker compose -f observability/prefect/docker-compose.yml up -d --build
+#
+# Requisitos: el clúster kind "aegisvolt" (red docker "kind") y Floci conectado a
+# esa red (bash scripts/kind-up.sh). El worker se conecta a la red "kind" para
+# leer DynamoDB en Floci y llamar a cada ambiente por el Ingress del control-plane.
+name: aegisvolt-prefect
+
+services:
+  prefect-server:
+    image: prefecthq/prefect:3.9.1-python3.12
+    command: prefect server start --host 0.0.0.0
+    environment:
+      PREFECT_UI_API_URL: http://localhost:4200/api
+      PREFECT_SERVER_ANALYTICS_ENABLED: "false"
+    ports:
+      - "4200:4200"
+    volumes:
+      - prefect-data:/root/.prefect
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:4200/api/health', timeout=3)"]
+      interval: 5s
+      timeout: 5s
+      retries: 24
+    restart: unless-stopped
+
+  prefect-worker:
+    build: .
+    image: aegisvolt/prefect-worker:local
+    depends_on:
+      prefect-server:
+        condition: service_healthy
+    environment:
+      PREFECT_API_URL: http://prefect-server:4200/api
+      PREFECT_CLI_PROMPT: "false"
+      AWS_ENDPOINT_URL: http://aegisvolt-floci:4566
+      AWS_REGION: us-east-1
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      INGRESS_URL: http://aegisvolt-control-plane:80
+    # Registra el work pool y los deployments (idempotente) y queda escuchando.
+    command:
+      - bash
+      - -c
+      - |
+        prefect work-pool create aegisvolt-local --type process --overwrite
+        prefect deploy --all
+        exec prefect worker start --pool aegisvolt-local --type process
+    volumes:
+      # Editar un flow no requiere reconstruir la imagen (solo reiniciar el worker).
+      - ./flows:/opt/prefect/flows:ro
+      - ./prefect.yaml:/opt/prefect/prefect.yaml:ro
+    networks: [default, kind]
+    restart: unless-stopped
+
+networks:
+  kind:
+    external: true
+
+volumes:
+  prefect-data:

@@ -1,0 +1,36 @@
+# Deployments de Prefect para AegisVolt (los registra el worker al arrancar con
+# `prefect deploy --all`; ver docker-compose.yml de esta carpeta).
+name: aegisvolt
+prefect-version: 3.9.1
+
+# El código ya está dentro de la imagen del worker: no hay build ni push.
+build: null
+push: null
+pull:
+  - prefect.deployments.steps.set_working_directory:
+      directory: /opt/prefect
+
+deployments:
+  - name: cada-5-min
+    description: Salud y latencia de gateway, servicios, flags y frontend en dev, test y prod.
+    entrypoint: flows/env_health_check.py:env_health_check
+    tags: [aegisvolt, salud]
+    parameters:
+      envs: [dev, test, prod]
+    work_pool:
+      name: aegisvolt-local
+    schedules:
+      - interval: 300
+
+  - name: cada-10-min
+    description: Sagas huérfanas y verificación de compensaciones y cargas contra las bases de cada servicio.
+    entrypoint: flows/saga_consistency_audit.py:saga_consistency_audit
+    tags: [aegisvolt, saga]
+    parameters:
+      envs: [dev, test, prod]
+      stale_minutes: 5
+      lookback_hours: 24
+    work_pool:
+      name: aegisvolt-local
+    schedules:
+      - interval: 600
