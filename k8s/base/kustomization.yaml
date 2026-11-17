@@ -1,9 +1,10 @@
 # -----------------------------------------------------------------------------
 # Base común de AegisVolt (la misma para dev, test y prod).
-#   - 4 Rollouts de Argo (canary 20 -> 50 -> 100 con análisis automático)
+#   - 5 Rollouts de Argo (canary 20 -> 50 -> 100 con análisis automático)
 #   - Service estable + Service canary por servicio
-#   - Ingress NGINX para el gateway (el canary del gateway reparte tráfico por peso)
-#   - AnalysisTemplate "canary-analysis" (success-rate + 5xx en CloudWatch)
+#   - Ingress NGINX: "/" -> frontend, "/graphql" -> gateway (canary por peso)
+#   - AnalysisTemplate "canary-analysis" (success-rate + 5xx en CloudWatch) y
+#     "frontend-analysis" (la SPA se sirve completa, sin errores)
 #
 # Los overlays (k8s/overlays/<env>) ponen el namespace, APP_ENV, réplicas y host.
 # La etiqueta de imagen (<git-sha>) la fija scripts/k8s-deploy.sh, nunca "latest".
@@ -24,6 +25,7 @@ resources:
   - billing-wallet-service.yaml
   - energy-dispatch-service.yaml
   - graphql-gateway.yaml
+  - frontend.yaml
 
 # Configuración común a los 4 servicios. Sin sufijo hash: el nombre es estable y
 # un cambio de ConfigMap no dispara un canary (el canary lo dispara la imagen).
@@ -41,8 +43,10 @@ configMapGenerator:
       - CLOUDWATCH_LOGS_ENABLED=true
       - LOG_LEVEL=info
 
-# Mismos pasos de canary para todos los Rollouts (un solo lugar que mantener).
+# Mismos pasos de canary para los 4 servicios Node (un solo lugar que mantener).
+# El frontend (tier ui) trae sus propios pasos y su análisis (frontend.yaml).
 patches:
   - path: canary-steps.yaml
     target:
       kind: Rollout
+      labelSelector: aegisvolt/tier in (internal,edge)

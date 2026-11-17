@@ -24,4 +24,4 @@ Los microservicios son dueños de sus datos y no deben conocer las necesidades d
 
 ## Consecuencias
 - **PubSub en memoria:** las subscriptions funcionan con **una réplica** del gateway. Con varias réplicas se necesitaría un bus compartido (Redis, EventBridge o DynamoDB Streams). Por eso el gateway corre con una réplica en cada ambiente.
-- **Validación del esquema en CI** (día 5): `graphql-schema-linter` y `graphql-inspector` detectan cambios incompatibles.
+- **Validación del esquema en CI:** hoy el esquema se valida con los tipos (`tsc` en `lint-build`), los tests del gateway (`unit-tests` e `integration-tests`) y, desde el día 6, con el frontend: sus operaciones tipadas compilan contra el esquema y el job `e2e-tests` las ejecuta contra el gateway real. Agregar `graphql-inspector` para detectar cambios incompatibles queda como mejora opcional del día 7.

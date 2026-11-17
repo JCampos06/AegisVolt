@@ -4,8 +4,8 @@
 #
 #   bash scripts/k8s-deploy.sh <dev|test|prod> [opciones]
 #
-#   --faulty <servicio>   despliega <servicio> con FAULTY_VERSION=true (~30% de 500)
-#                         para la demo de rollback automático del canary
+#   --faulty <servicio>   despliega <servicio> (uno de los 4 Node) con FAULTY_VERSION=true
+#                         (~30% de 500) para la demo de rollback automático del canary
 #   --tag <tag>           etiqueta de imagen (por defecto: git sha corto)
 #   --no-wait             no espera a que terminen los canary
 #
@@ -19,7 +19,9 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-SERVICES=(station-reservation-service billing-wallet-service energy-dispatch-service graphql-gateway)
+# Servicios Node (Dockerfile de la raíz) + frontend (apps/frontend/Dockerfile).
+NODE_SERVICES=(station-reservation-service billing-wallet-service energy-dispatch-service graphql-gateway)
+SERVICES=("${NODE_SERVICES[@]}" frontend)
 REGISTRY="${REGISTRY:-localhost:5001}"
 CONTEXT="${KUBE_CONTEXT:-kind-aegisvolt}"
 FLOCI_CONTAINER="${FLOCI_CONTAINER:-aegisvolt-floci}"
@@ -39,8 +41,8 @@ while [ $# -gt 0 ]; do
     *) usage ;;
   esac
 done
-if [ -n "$FAULTY" ] && [[ ! " ${SERVICES[*]} " =~ \ $FAULTY\  ]]; then
-  echo "Servicio desconocido para --faulty: $FAULTY (opciones: ${SERVICES[*]})"; exit 1
+if [ -n "$FAULTY" ] && [[ ! " ${NODE_SERVICES[*]} " =~ \ $FAULTY\  ]]; then
+  echo "Servicio desconocido para --faulty: $FAULTY (opciones: ${NODE_SERVICES[*]})"; exit 1
 fi
 
 # kubectl-argo-rollouts suele quedar en ~/.local/bin
@@ -79,7 +81,11 @@ for svc in "${SERVICES[@]}"; do
     continue
   fi
   echo "==> Build + push $image"
-  docker build -q --build-arg SERVICE="$svc" --build-arg APP_VERSION="$TAG" -t "$image" . >/dev/null
+  if [ "$svc" = frontend ]; then
+    docker build -q -f apps/frontend/Dockerfile --build-arg APP_VERSION="$TAG" -t "$image" . >/dev/null
+  else
+    docker build -q --build-arg SERVICE="$svc" --build-arg APP_VERSION="$TAG" -t "$image" . >/dev/null
+  fi
   docker push -q "$image" >/dev/null
 done
 
@@ -124,9 +130,31 @@ fi
 
 # 4. Aplicar
 echo "==> kubectl apply -k $DEPLOY_DIR"
-"${K[@]}" apply -k "$DEPLOY_DIR"
+# Reintento: el webhook de ingress-nginx valida cada Ingress contra su caché; si
+# en el mismo apply un Ingress suelta una ruta y otro la toma (p. ej. "/" pasa del
+# gateway al frontend), el primer intento puede rechazarse aunque el estado final sea válido.
+for attempt in 1 2 3; do
+  if "${K[@]}" apply -k "$DEPLOY_DIR"; then break; fi
+  [ "$attempt" = 3 ] && { echo "==> kubectl apply falló 3 veces"; exit 1; }
+  echo "    reintentando apply en 5 s ($attempt/3)..."; sleep 5
+done
 
 [ "$WAIT" = 1 ] || { echo "==> Sin esperar (--no-wait). Sigue el canary con:"; echo "    kubectl argo rollouts get rollout <servicio> -n $NS -w"; exit 0; }
+
+# Un Rollout nuevo puede quedar un instante en InvalidSpec si se crea antes que el
+# Ingress que referencia (stableIngress). Argo lo reevalúa al aparecer el Ingress;
+# se espera a que se resuelva para que "rollouts status" no se rinda antes de tiempo.
+for svc in "${SERVICES[@]}"; do
+  for _ in $(seq 1 12); do
+    msg="$("${K[@]}" -n "$NS" get rollout "$svc" -o jsonpath='{.status.message}' 2>/dev/null || true)"
+    case "$msg" in
+      InvalidSpec*)
+        "${K[@]}" -n "$NS" annotate rollout "$svc" "aegisvolt/reconcile=$(date +%s)" --overwrite >/dev/null
+        sleep 5 ;;
+      *) break ;;
+    esac
+  done
+done
 
 # 5. Esperar los canary (corren en paralelo; los esperamos uno por uno)
 echo "==> Esperando los Rollouts (timeout $TIMEOUT). En otra terminal:"

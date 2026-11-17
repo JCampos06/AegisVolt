@@ -101,7 +101,8 @@ spec:
   ports:
     - { name: http, port: 80, targetPort: http }
 ---
-# Entrada HTTP del ambiente. El host lo fija cada overlay (<env>.aegisvolt.localhost).
+# Entrada HTTP del gateway: /graphql (HTTP y WebSocket). "/" lo atiende el Ingress
+# "frontend". El host lo fija cada overlay (<env>.aegisvolt.localhost).
 # kind publica el puerto 80 del nodo en localhost:8080 (k8s/kind-config.yaml).
 apiVersion: networking.k8s.io/v1
 kind: Ingress
@@ -117,7 +118,7 @@ spec:
     - host: dev.aegisvolt.localhost
       http:
         paths:
-          - path: /
+          - path: /graphql
             pathType: Prefix
             backend:
               service:

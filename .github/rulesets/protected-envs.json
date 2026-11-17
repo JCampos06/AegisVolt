@@ -33,6 +33,7 @@
           { "context": "lint-build" },
           { "context": "unit-tests" },
           { "context": "integration-tests" },
+          { "context": "e2e-tests" },
           { "context": "terraform-plan" }
         ]
       }
