@@ -13,6 +13,7 @@ Hay dos tipos de tráfico:
 ## Decisión
 - **Argo Rollouts** (v1.10.2) reemplaza a los `Deployment`. Hay un `Rollout` por servicio en `k8s/base/`, y un overlay de Kustomize por ambiente (`k8s/overlays/<env>`) que fija el namespace, `APP_ENV`, las réplicas (2/3/5) y el host.
 - **Pasos comunes**, definidos en un solo lugar (`k8s/base/canary-steps.yaml`): `20% → pausa 60 s → análisis → 50% → pausa 60 s → análisis → 100%`.
+- **Frontend (día 6):** también canary por peso con NGINX, con su propio Ingress (`/`) y pasos más cortos (pausas de 30 s). Usa `frontend-analysis`, un Job que pide la SPA completa (`index.html`, el bundle con hash, `/healthz` y una ruta interna) 160 veces al Service canary y falla con un solo error, porque nginx no expone `/metrics.json` ni escribe en CloudWatch.
 - **Gateway:** canary por peso con **NGINX**. Argo crea un Ingress `-canary` con `canary-weight` 20 y después 50, y lo vuelve a 0 al terminar. El peso aplica al tráfico real, no a la cantidad de pods.
 - **Servicios internos:** canary por **réplicas**. El gateway llama al Service estable, que selecciona los pods de las dos versiones, y el peso es la proporción de pods de cada una. El Service `-canary` apunta solo a la versión nueva y lo usa el análisis.
 - **`AnalysisTemplate canary-analysis`**, el mismo para los 4 servicios y los 3 ambientes. Los argumentos salen de las etiquetas y anotaciones del Rollout, y en cada paso corren tres métricas:

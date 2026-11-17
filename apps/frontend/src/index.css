@@ -1,0 +1,82 @@
+@import "tailwindcss";
+
+/* Tablero eléctrico: gris de gabinete, tinta de plano técnico y amarillo de
+   "energizado" (solo donde hay corriente o avance). Ver docs/frontend.md. */
+@theme {
+  --color-gabinete: #e4e6e3;
+  --color-papel: #f7f8f6;
+  --color-tinta: #1d2b3f;
+  --color-tinta-suave: #4a5a6e;
+  --color-linea: #c5cac6;
+  --color-energia: #f2b705;
+  --color-energia-claro: #fff6d6;
+  --color-energia-osc: #8a6700;
+  --color-acero: #3a5a80;
+  --color-ok: #2f7d4f;
+  --color-ok-claro: #ddefe3;
+  --color-reservado: #2f5fa8;
+  --color-falla: #b3261e;
+  --color-falla-claro: #f6e0de;
+  --color-env-dev: #0f766e;
+  --color-env-test: #6b3fa0;
+  --color-env-prod: #b3261e;
+
+  --font-display: "Barlow Semi Condensed", "Arial Narrow", "Segoe UI", sans-serif;
+  --font-sans: "Barlow", "Segoe UI", system-ui, sans-serif;
+  --font-mono: ui-monospace, "Cascadia Code", Consolas, monospace;
+}
+
+@layer base {
+  html { color-scheme: light; }
+  body { @apply bg-gabinete text-tinta font-sans text-[15px] leading-normal antialiased; }
+  h1, h2, h3 { text-wrap: balance; }
+  :focus-visible { outline: 3px solid var(--color-acero); outline-offset: 2px; }
+  .tabular { font-variant-numeric: tabular-nums; }
+}
+
+@layer components {
+  .field {
+    @apply w-full rounded-[3px] border border-linea bg-white px-2.5 py-2 font-sans text-base font-medium text-tinta;
+  }
+  .field:disabled { @apply bg-gabinete text-tinta-suave; }
+}
+
+.env-band[data-env="prod"] {
+  background: repeating-linear-gradient(135deg, var(--color-env-prod) 0 14px, #9c1f18 14px 28px);
+}
+
+/* Diagrama unifilar de la SAGA */
+.u-wire { stroke: var(--color-tinta); stroke-width: 2.5; fill: none; }
+.u-live { stroke: var(--color-energia); stroke-width: 6; fill: none; stroke-linecap: round;
+  stroke-dasharray: 1; stroke-dashoffset: 1; transition: stroke-dashoffset .5s ease; }
+.u-live[data-on="true"] { stroke-dashoffset: 0; }
+.u-term { fill: var(--color-papel); stroke: var(--color-tinta); stroke-width: 2.5; }
+.u-blade { stroke: var(--color-tinta); stroke-width: 3.5; stroke-linecap: round;
+  transition: transform .35s ease, stroke .2s; transform: rotate(-30deg); }
+.u-blade[data-s="running"] { stroke: var(--color-energia-osc); transform: rotate(-14deg); }
+.u-blade[data-s="closed"] { stroke: var(--color-energia-osc); transform: rotate(0deg); }
+.u-blade[data-s="fault"] { stroke: var(--color-falla); transform: rotate(-38deg); }
+.u-blade[data-s="undone"] { stroke: var(--color-acero); transform: rotate(-30deg); }
+.u-name { font: 600 16px var(--font-display); fill: var(--color-tinta); }
+.u-desc { font: 400 13px var(--font-sans); fill: var(--color-tinta-suave); }
+.u-state { font: 600 13px var(--font-sans); fill: var(--color-tinta-suave); }
+.u-state[data-s="closed"] { fill: var(--color-ok); }
+.u-state[data-s="running"] { fill: var(--color-energia-osc); }
+.u-state[data-s="fault"] { fill: var(--color-falla); }
+.u-state[data-s="undone"] { fill: var(--color-acero); }
+.u-src, .u-load { fill: var(--color-papel); stroke: var(--color-tinta); stroke-width: 2.5; transition: fill .4s; }
+.u-load[data-on="true"] { fill: var(--color-energia); }
+.u-glyph { fill: var(--color-tinta); }
+.u-ret { stroke: var(--color-acero); stroke-width: 2.5; fill: none; stroke-dasharray: 7 6; }
+.u-ret-lbl { font: 600 13px var(--font-sans); fill: var(--color-acero); opacity: 0; transition: opacity .3s; }
+.u-ret-lbl[data-on="true"] { opacity: 1; }
+.u-arrow { fill: none; stroke: var(--color-acero); stroke-width: 2.5; opacity: 0; transition: opacity .3s; }
+.u-arrow[data-on="true"] { opacity: 1; }
+.u-mask { stroke: #fff; stroke-width: 8; fill: none; stroke-dasharray: 1; stroke-dashoffset: 1; transition: stroke-dashoffset .8s ease; }
+.u-mask[data-on="true"] { stroke-dashoffset: 0; }
+.u-x { stroke: var(--color-falla); stroke-width: 3; opacity: 0; transition: opacity .2s; }
+.u-x[data-on="true"] { opacity: 1; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { transition-duration: 0s !important; animation-duration: 0s !important; }
+}

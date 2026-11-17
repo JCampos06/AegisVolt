@@ -1,0 +1,34 @@
+{
+  "name": "frontend",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Panel de operación AegisVolt (React + Vite + Apollo Client + Tailwind)",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -p tsconfig.json --noEmit && vite build",
+    "lint": "tsc -p tsconfig.json --noEmit",
+    "preview": "vite preview",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@apollo/client": "^4.3.8",
+    "@fontsource/barlow": "^5.3.0",
+    "@fontsource/barlow-semi-condensed": "^5.3.0",
+    "graphql": "^16.15.0",
+    "graphql-ws": "^6.4.2",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "rxjs": "^7.8.2"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.3.5",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.3.0",
+    "tailwindcss": "^4.3.5",
+    "typescript": "^6.0.3",
+    "vite": "^8.3.8",
+    "vitest": "^5.1.0"
+  }
+}
