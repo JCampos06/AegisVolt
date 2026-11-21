@@ -21,7 +21,7 @@ Hay dos tipos de tráfico:
   2. **`success-rate`** (provider `web`): lee `/metrics.json` del pod canary y exige `successRate >= 0.95`.
   3. **`cloudwatch-5xx`** (Job con `aws-cli`): suma la métrica `Http5xx` (el metric filter del log group `/aegisvolt/<env>/<servicio>`, dimensiones `Service` y `Version` = la del canary) de los últimos 10 minutos. Falla si hay más de 5.
 - **Si una métrica falla, Argo aborta y vuelve al 100% estable sin intervención.** `scripts/k8s-deploy.sh` y `deploy.yml` esperan con `kubectl argo rollouts status`: un Rollout `Degraded` hace fallar el pipeline.
-- **Imágenes inmutables:** el tag es el `git-sha` y se suben al registro local `localhost:5001`. La versión viaja en la etiqueta `app.kubernetes.io/version` y en `APP_VERSION`, y por eso los logs y la métrica de CloudWatch distinguen la versión estable de la canary.
+- **Imágenes inmutables:** el tag es el `git-sha` y se suben al registro local `localhost:5001`. La versión viaja en la etiqueta `app.kubernetes.io/version` y en `APP_VERSION`, y por eso los logs y la métrica de CloudWatch distinguen la versión estable de la canary. Cada ambiente construye su imagen desde el merge commit de su rama. El código es el mismo que se aprobó en el ambiente anterior, pero el artefacto es otro (ver *Mejora futura*).
 
 ## Alternativas consideradas
 - **`Deployment` con `RollingUpdate`.** Solo revisa las probes, así que una versión que responde 500 pero pasa `/health` llega al 100%. Tampoco tiene pasos ni rollback por métricas.
@@ -34,4 +34,9 @@ Hay dos tipos de tráfico:
 - **El gateway tiene 1 réplica** por el PubSub en memoria ([ADR-0005](0005-graphql-bff-y-rest-interno.md)). Durante un canary conviven 1 pod estable y 1 canary, y una subscription puede quedar en el pod que se retira, así que el cliente se reconecta.
 - **Primer despliegue:** en el primer despliegue de un ambiente no hay versión estable, así que Argo va directo al 100%. El canary aplica a partir del segundo.
 - **El mapeo de puertos de kind solo existe en el control-plane:** ingress-nginx debe correr ahí (`nodeSelector: ingress-ready=true`), y `scripts/kind-up.sh` lo asegura.
+- **Mejora futura (*build once, deploy many*):** hoy, `dev → test` y `test → prod` vuelven a construir las imágenes porque cada merge commit tiene otro sha. Lo correcto sería promover el artefacto ya aprobado. Se haría así:
+  - etiquetar con el hash del árbol de git (`git rev-parse HEAD^{tree}`), que no cambia en un merge de promoción;
+  - en el deploy, reusar la imagen del registro si ya existe esa etiqueta, y construirla solo si falta.
+
+  No se hizo porque no lo exige la especificación y porque cambiar el pipeline en el último día ponía en riesgo las demos. Mientras tanto, el canary analiza de nuevo cada versión en cada ambiente.
 - **En AWS real**, el `AWS_ENDPOINT_URL` de Floci desaparece, las credenciales de los Jobs pasan a IRSA, el registro pasa a ser ECR y el Ingress NGINX queda detrás del API Gateway y del VPC Link ([ADR-0008](0008-topologia-red-vpc-vpce.md)).

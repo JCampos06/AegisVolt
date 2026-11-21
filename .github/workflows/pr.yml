@@ -3,7 +3,10 @@
 #
 #   promotion-guard    feature/* -> dev -> test -> prod (nada se salta un ambiente)
 #   lint-build         tsc (tipos), build de los paquetes (incluido el frontend),
-#                      kustomize de los 3 overlays y docker build de las 5 imágenes
+#                      esquema GraphQL con graphql-inspector (validate de las
+#                      operaciones de la UI + diff sin breaking changes contra la
+#                      rama destino), kustomize de los 3 overlays y docker build
+#                      de las 5 imágenes
 #   unit-tests         Vitest (SAGA, compensaciones, idempotencia, pricing, diagrama de la UI)
 #   integration-tests  Floci efímero como service container + Vitest contra DynamoDB
 #   e2e-tests          docker compose completo (Floci + 4 servicios + frontend) con
@@ -71,6 +74,17 @@ jobs:
         run: pnpm -r build
       - name: Tipos (tsc --noEmit en todos los paquetes)
         run: pnpm -r lint
+      - name: Exportar el contrato GraphQL (esquema del PR, esquema de ${{ github.base_ref }} y operaciones del frontend)
+        env:
+          BASE: ${{ github.base_ref }}
+        run: |
+          git fetch --no-tags --depth=1 origin "$BASE"
+          git show "origin/$BASE:services/graphql-gateway/src/schema.ts" > /tmp/base-schema.ts
+          node scripts/graphql-export.ts /tmp/gql /tmp/base-schema.ts
+      - name: graphql-inspector validate (las operaciones del frontend existen en el esquema)
+        run: npx --yes @graphql-inspector/cli@7.0.2 validate '/tmp/gql/operations/*.graphql' /tmp/gql/schema.graphql
+      - name: graphql-inspector diff (sin breaking changes contra ${{ github.base_ref }})
+        run: npx --yes @graphql-inspector/cli@7.0.2 diff /tmp/gql/base-schema.graphql /tmp/gql/schema.graphql
       - name: Manifiestos Kubernetes (kustomize de los 3 overlays)
         run: |
           for env in dev test prod; do
