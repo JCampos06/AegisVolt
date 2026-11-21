@@ -2,6 +2,8 @@
 
 Plataforma cloud-native de gestión de carga para flotas de vehículos eléctricos y electrolineras B2B. Los operadores reservan bahías de carga, retienen saldo, activan sesiones de energía y auditan telemetría. La plataforma corre en tres ambientes aislados (`dev`, `test`, `prod`) con IaC, despliegues canary y consistencia eventual mediante SAGA.
 
+Hecho por: Juan José Campos Covaleda
+
 > Proyecto Final — *Patrones Arquitectónicos Avanzados*, Universidad de La Sabana.
 
 ## Stack
@@ -71,13 +73,27 @@ docs/adr/               decisiones de arquitectura
 - [ADR-0001](docs/adr/0001-floci-kind-como-nube-local.md) — Floci + kind como plataforma de ejecución
 - [ADR-0002](docs/adr/0002-saga-orquestada-en-gateway.md) — SAGA orquestada dentro del gateway
 - [ADR-0003](docs/adr/0003-idempotencia-escrituras-condicionales.md) — Idempotencia con escrituras condicionales en DynamoDB
+- [ADR-0004](docs/adr/0004-feature-flags-propias-en-dynamodb.md) — Feature flags propias en DynamoDB, una tabla por ambiente
 - [ADR-0005](docs/adr/0005-graphql-bff-y-rest-interno.md) — GraphQL como BFF y REST interno
 - [ADR-0006](docs/adr/0006-canary-argo-rollouts.md) — Canary con Argo Rollouts, NGINX y análisis automático
 - [ADR-0007](docs/adr/0007-estado-terraform-s3-versionado-workspaces.md) — Estado en S3 versionado + workspaces
 - [ADR-0008](docs/adr/0008-topologia-red-vpc-vpce.md) — Topología de red VPC / VPC Endpoints
+- [ADR-0009](docs/adr/0009-logging-estructurado-y-correlation-id.md) — Logging estructurado en JSON con `correlation_id`
 - [ADR-0010](docs/adr/0010-rulesets-y-promotion-guard.md) — Rulesets + promotion-guard
 
-Vista completa (red, datos y recorrido de un paquete): [docs/arquitectura.md](docs/arquitectura.md)
+Diagramas C4 (contexto, contenedores, componentes del gateway, secuencia de la SAGA y despliegue), red, datos y recorrido de un paquete: [docs/arquitectura.md](docs/arquitectura.md)
+
+```mermaid
+flowchart LR
+  ui["frontend<br/>React"] -- "GraphQL /graphql" --> gw["graphql-gateway<br/>BFF + orquestador SAGA"]
+  gw -- "1 reserve · C release" --> res["station-reservation"]
+  gw -- "2 hold · C refund" --> bill["billing-wallet"]
+  gw -- "3 activate" --> disp["energy-dispatch"]
+  res --> t1[("reservations-&lt;env&gt;")]
+  bill --> t2[("billing-&lt;env&gt;")]
+  disp --> t3[("dispatch-&lt;env&gt;")]
+  gw --> t4[("sagas-&lt;env&gt; · flags-&lt;env&gt;")]
+```
 
 ## Microservicios
 
@@ -112,6 +128,7 @@ bash scripts/demo-saga.sh test lowfunds        # hold 402 -> release = COMPENSAT
 bash scripts/demo-saga.sh test fault           # flag de fallo -> refund -> release = COMPENSATED
 
 bash scripts/trace-saga.sh <correlation_id> test   # la saga completa desde CloudWatch Logs
+bash scripts/saga-tables.sh <correlation_id> test  # lo que quedó en cada tabla (REFUNDED, RELEASED, AVAILABLE…)
 ```
 
 UI: `http://localhost:8081`. GraphQL: `http://localhost:4000/graphql`. La imagen de cada servicio sale del mismo [Dockerfile](Dockerfile) multi-stage (`--build-arg SERVICE=<servicio>`), con usuario no root, solo dependencias de producción y `HEALTHCHECK`.
@@ -127,7 +144,7 @@ Panel de operación con 4 vistas. Diseño y decisiones en [docs/frontend.md](doc
 | Flags | Interruptores de las feature flags del ambiente (solo lectura en prod) |
 | Historial | Sagas con estado, pasos, compensaciones y `correlationId` copiable |
 
-La franja superior muestra siempre el ambiente (dev verde azulado, test violeta, prod rojo). Una sola imagen sirve en los 3 ambientes: la UI usa `/graphql` del mismo host y lee el ambiente del gateway.
+La franja superior muestra siempre el ambiente (dev verde azulado, test violeta, prod rojo). El build no depende del ambiente: la UI usa `/graphql` del mismo host y le pregunta al gateway en qué ambiente está.
 
 ```bash
 pnpm --filter frontend dev          # http://localhost:5173, /graphql -> gateway de docker compose (:4000)
@@ -157,7 +174,7 @@ bash scripts/toggle-flag.sh dev                                      # lista las
 bash scripts/toggle-flag.sh test SIMULATE_CHARGER_HARDWARE_FAULT true
 ```
 
-También desde la vista Flags del frontend (dev y test).
+También se cambian desde la vista Flags del frontend en dev y test. En prod, la vista es de solo lectura y la mutation exige `x-admin-token`. Los servicios ven el cambio en unos 5 s, que es lo que dura su caché ([ADR-0004](docs/adr/0004-feature-flags-propias-en-dynamodb.md)).
 
 ## Kubernetes (kind + Argo Rollouts)
 
@@ -195,7 +212,16 @@ Cada corrida publica artifacts (tabla y resumen markdown con el comando `trace-s
 
 | Workflow | Disparo | Jobs |
 |---|---|---|
-| [pr.yml](.github/workflows/pr.yml) | PR a dev, test o prod | `promotion-guard`, `lint-build`, `unit-tests`, `integration-tests` (Floci efímero), `e2e-tests` (compose + Playwright), `terraform-plan` (self-hosted) |
+| [pr.yml](.github/workflows/pr.yml) | PR a dev, test o prod | `promotion-guard`, `lint-build` (tipos, build, esquema GraphQL con `graphql-inspector`, kustomize, 5 imágenes), `unit-tests`, `integration-tests` (Floci efímero), `e2e-tests` (compose + Playwright), `terraform-plan` (self-hosted) |
 | [deploy.yml](.github/workflows/deploy.yml) | push (merge) a dev, test o prod | `ENV=${GITHUB_REF_NAME}`: terraform apply del workspace, imágenes `:<sha>`, canary y smoke test (self-hosted) |
+
+Los 6 jobs de `pr.yml` son *required status checks* del ruleset `protected-envs`, que además bloquea el push directo y el force push a `dev`, `test` y `prod`, sin lista de bypass ([ADR-0010](docs/adr/0010-rulesets-y-promotion-guard.md)).
+
+**Validación del contrato GraphQL** (dentro de `lint-build`):
+```bash
+node scripts/graphql-export.ts /tmp/gql <schema-base.ts>    # esquema + 12 operaciones de la UI a .graphql
+npx @graphql-inspector/cli@7.0.2 validate '/tmp/gql/operations/*.graphql' /tmp/gql/schema.graphql
+npx @graphql-inspector/cli@7.0.2 diff /tmp/gql/base-schema.graphql /tmp/gql/schema.graphql   # falla si hay breaking changes
+```
 
 Para configurar el runner del PC, ver [docs/self-hosted-runner.md](docs/self-hosted-runner.md).
