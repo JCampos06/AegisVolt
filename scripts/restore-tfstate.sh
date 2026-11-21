@@ -8,6 +8,7 @@
 # VersionId). Esto crea una versión NUEVA idéntica a la antigua: el historial
 # no se pierde, y la versión corrupta sigue disponible para auditoría.
 set -euo pipefail
+export MSYS_NO_PATHCONV=1   # Git Bash: no convertir "env:/dev/..." en ruta de Windows
 
 ENV="${1:?Uso: restore-tfstate.sh <dev|test|prod> [version-id]}"
 VERSION="${2:-}"
@@ -18,9 +19,12 @@ CONTAINER="${FLOCI_CONTAINER:-aegisvolt-floci}"
 case "$ENV" in dev|test|prod) ;; *) echo "Ambiente inválido: $ENV" >&2; exit 1 ;; esac
 
 if command -v aws >/dev/null 2>&1; then
+  # Credenciales de prueba de Floci si la terminal no tiene otras.
+  export AWS_ACCESS_KEY_ID="${AWS_ACCESS_KEY_ID:-test}" AWS_SECRET_ACCESS_KEY="${AWS_SECRET_ACCESS_KEY:-test}" \
+         AWS_DEFAULT_REGION="${AWS_DEFAULT_REGION:-us-east-1}"
   aws_() { aws --endpoint-url "${AWS_ENDPOINT_URL:-http://localhost:4566}" "$@"; }
 else
-  aws_() { MSYS_NO_PATHCONV=1 docker exec "$CONTAINER" aws --endpoint-url http://localhost:4566 "$@"; }
+  aws_() { docker exec "$CONTAINER" aws --endpoint-url http://localhost:4566 "$@"; }
 fi
 
 if [ -z "$VERSION" ]; then
