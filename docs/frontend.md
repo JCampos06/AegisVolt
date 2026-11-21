@@ -35,15 +35,20 @@ La identidad viene de los **tableros eléctricos industriales** y los **diagrama
 
 Las sagas terminan en milisegundos, así que la vista muestra el log **de a un paso** (420 ms) para que el avance se vea. La subscription `sagaUpdated(correlationId)` y la respuesta de la mutation se combinan quedándose con la versión más avanzada. La lógica tiene pruebas unitarias en [apps/frontend/test](../apps/frontend/test).
 
-## Una imagen para los 3 ambientes
+## Un mismo build para los 3 ambientes
 
-El plan original proponía un build por ambiente (`VITE_GRAPHQL_URL`, `VITE_APP_ENV`). Se cambió a **una sola imagen promovida dev → test → prod**:
+El plan original proponía un build distinto por ambiente (`VITE_GRAPHQL_URL`, `VITE_APP_ENV`). Se cambió a un **build que no depende del ambiente**: la imagen no lleva nada propio de dev, test o prod.
 
 - **Mismo host:** UI y gateway comparten host. En kind, el Ingress `frontend` atiende `/` y el Ingress `graphql-gateway` atiende `/graphql`. La UI usa `/graphql` relativo y `ws(s)://<host>/graphql` para las subscriptions.
 - **Ambiente en tiempo de ejecución:** se lee del gateway (`{ environment }`), así que la franja no puede mentir sobre el ambiente.
 - **Versión:** la única variable de build es la versión (`VITE_APP_VERSION` = git sha), que se ve en la franja.
 
-Así lo que se probó en test es byte a byte lo que llega a prod, igual que con los servicios.
+**Cómo se promueve hoy:** cada merge (`dev → test`, `test → prod`) dispara `deploy.yml`, que **reconstruye** la imagen desde el merge commit de esa rama y le pone su sha como etiqueta.
+- El código es el mismo que se probó en el ambiente anterior, porque el merge de promoción no lo cambia.
+- La imagen, en cambio, no es la misma byte a byte: tiene otra etiqueta y otra versión en la franja. Lo mismo pasa con los 4 servicios.
+- El análisis del canary corre de nuevo en cada ambiente, así que una reconstrucción defectuosa no pasaría.
+
+**En AWS real** se haría *build once, deploy many*: test y prod reusarían, desde ECR, la imagen ya aprobada en el ambiente anterior. Por ejemplo, con una etiqueta igual al hash del árbol de git, que no cambia en el merge de promoción. Ver la sección "Mejora futura" del [ADR-0006](adr/0006-canary-argo-rollouts.md).
 
 ## Entrega
 

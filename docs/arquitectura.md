@@ -1,14 +1,77 @@
 # Arquitectura de AegisVolt
 
+Diagramas en notación C4, dibujados con Mermaid (GitHub los muestra directamente). Cada ambiente (`dev`, `test` y `prod`) es una copia completa e independiente de lo que muestran los niveles 1 a 3.
+
 ## 1. Vista de contexto (C4 nivel 1)
 
-```
- [Operador de flota] --HTTPS/WSS--> [ AegisVolt (por ambiente: dev | test | prod) ]
-                                         |                 |              |
-                                   DynamoDB (5 tablas)  CloudWatch    Prefect (auditoría)
+Quién usa AegisVolt y con qué sistemas externos habla.
+
+```mermaid
+flowchart TB
+  operador["👤 <b>Operador de flota</b><br/>Reserva conectores, inicia y detiene cargas,<br/>revisa el historial de sagas"]
+  admin["👤 <b>Administrador de plataforma</b><br/>Cambia feature flags y despliega por PR"]
+
+  aegis["<b>AegisVolt</b> (un sistema por ambiente)<br/>Reserva de bahías, cobro con retención de saldo,<br/>activación de carga y compensación SAGA"]
+
+  aws[("<b>AWS</b> (emulado con Floci)<br/>DynamoDB · CloudWatch · S3 · API Gateway · VPC")]
+  github["<b>GitHub</b><br/>Rulesets · Actions · runner propio"]
+  prefect["<b>Prefect</b><br/>Salud de los 3 ambientes y<br/>auditoría de consistencia de sagas"]
+
+  operador -- "Usa la UI web<br/>(HTTPS / WSS)" --> aegis
+  admin -- "Activa o apaga flags<br/>(UI o toggle-flag.sh)" --> aegis
+  admin -- "Abre PRs feature → dev → test → prod" --> github
+  github -- "terraform apply + canary<br/>en el ambiente de la rama" --> aegis
+  aegis -- "Datos, logs y métricas" --> aws
+  prefect -- "Lee sagas y llama /graphql" --> aegis
+  prefect -- "Publica métricas" --> aws
 ```
 
 ## 2. Vista de contenedores (C4 nivel 2)
+
+Las piezas desplegables de un ambiente. En kind, todas corren en el namespace `aegisvolt-<env>`.
+
+```mermaid
+flowchart TB
+  operador["👤 Operador de flota"]
+
+  subgraph k8s["Kubernetes — namespace aegisvolt-&lt;env&gt;"]
+    ingress["<b>NGINX Ingress</b><br/>host &lt;env&gt;.aegisvolt.localhost<br/>/ → UI · /graphql → gateway<br/>pesos del canary"]
+    ui["<b>frontend</b><br/>React + Vite + Apollo · nginx sin root<br/>4 vistas: Estaciones, Cargar, Flags, Historial"]
+    gw["<b>graphql-gateway</b><br/>Node 24 · Apollo Server · graphql-ws<br/>BFF + orquestador SAGA"]
+    res["<b>station-reservation-service</b><br/>Node 24 · Fastify<br/>Conectores y bloqueo temporal"]
+    bill["<b>billing-wallet-service</b><br/>Node 24 · Fastify<br/>Cotización, retención y reembolso"]
+    disp["<b>energy-dispatch-service</b><br/>Node 24 · Fastify<br/>Activación física y telemetría"]
+  end
+
+  subgraph aws["AWS (Floci) — recursos con sufijo -&lt;env&gt;"]
+    tRes[("aegisvolt-reservations")]
+    tBill[("aegisvolt-billing")]
+    tDisp[("aegisvolt-dispatch")]
+    tSaga[("aegisvolt-sagas")]
+    tFlags[("aegisvolt-flags")]
+    cw["CloudWatch Logs + Metrics<br/>/aegisvolt/&lt;env&gt;/*"]
+  end
+
+  operador -- "HTTPS / WSS" --> ingress
+  ingress --> ui
+  ingress -- "GraphQL (queries, mutations,<br/>subscriptions)" --> gw
+  ui -. "/graphql (mismo host)" .-> ingress
+
+  gw -- "REST + Idempotency-Key<br/>+ x-correlation-id" --> res
+  gw -- "REST" --> bill
+  gw -- "REST" --> disp
+
+  gw -- "write-ahead de cada paso" --> tSaga
+  gw -- "lee / escribe flags" --> tFlags
+  res --> tRes
+  bill --> tBill
+  disp --> tDisp
+  res & bill & disp -. "lee flags (caché 5 s)" .-> tFlags
+
+  gw & res & bill & disp -. "logs JSON" .-> cw
+```
+
+Cada servicio es dueño de su tabla (*Database-per-Service*): nadie lee la tabla de otro. El gateway solo es dueño de `sagas` y `flags`.
 
 | Contenedor | Tecnología | Datos propios |
 |---|---|---|
@@ -18,6 +81,99 @@
 | station-reservation-service | Node 24 · Fastify | `aegisvolt-reservations-<env>` |
 | billing-wallet-service | Node 24 · Fastify | `aegisvolt-billing-<env>` |
 | energy-dispatch-service | Node 24 · Fastify | `aegisvolt-dispatch-<env>` |
+
+### 2.1 Componentes del gateway (C4 nivel 3)
+
+El contenedor con más lógica es el gateway, porque además de BFF es el orquestador de la SAGA ([ADR-0002](adr/0002-saga-orquestada-en-gateway.md)).
+
+```mermaid
+flowchart LR
+  subgraph gw["graphql-gateway"]
+    schema["<b>schema.ts + resolvers.ts</b><br/>Esquema unificado; valida entrada<br/>y el x-admin-token en prod"]
+    orch["<b>saga/orchestrator.ts</b><br/>Pasos reserve → hold → activate<br/>Compensa refund → release"]
+    store["<b>saga/store.ts</b><br/>Write-ahead en aegisvolt-sagas<br/>(STARTED antes de cada llamada)"]
+    clients["<b>clients.ts</b><br/>Cliente HTTP con reintentos<br/>(backoff + jitter, timeouts)"]
+    events["<b>events.ts</b><br/>PubSub en memoria →<br/>subscriptions graphql-ws"]
+    flags["<b>flags-admin.ts</b><br/>setFeatureFlag + FlagWatcher<br/>(sondeo cada 5 s)"]
+  end
+
+  schema --> orch
+  schema --> flags
+  orch --> store
+  orch --> clients
+  orch --> events
+  flags --> events
+  clients --> svc["3 servicios REST"]
+```
+
+Reglas del orquestador:
+- **Pasos:** 3 intentos, solo ante fallos transitorios (5xx o timeout).
+- **Errores de negocio:** un 402 (fondos insuficientes), 409 (conector ocupado) o 422 (falla de hardware) es definitivo. No se reintenta y se compensa directamente.
+- **Compensaciones:** hasta 6 intentos. Si se agotan, la saga queda en `COMPENSATING`, y la auditoría de Prefect la reporta.
+
+### 2.2 La SAGA "Reservar y Activar Carga"
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant UI as frontend
+  participant GW as gateway (orquestador)
+  participant R as reservas
+  participant B as billing
+  participant D as dispatch
+  UI->>GW: mutation startChargingSession
+  GW->>R: POST reserve (Idempotency-Key sagaId:reserve)
+  R-->>GW: 200 conector RESERVED
+  GW->>B: POST hold (sagaId:hold)
+  alt fondos insuficientes
+    B-->>GW: 402
+    GW->>R: release (compensación)
+  else saldo retenido
+    B-->>GW: 200 saldo retenido
+    GW->>D: POST activate (sagaId:activate)
+    alt SIMULATE_CHARGER_HARDWARE_FAULT
+      D-->>GW: 422 falla de hardware
+      GW->>B: refund (compensación)
+      GW->>R: release (compensación)
+      Note over GW: saga COMPENSATED
+    else cargador responde
+      D-->>GW: 200 sesión de carga activa
+      Note over GW: saga COMPLETED
+    end
+  end
+  GW-->>UI: sagaUpdated (subscription), cada paso
+```
+
+### 2.3 Despliegue (C4)
+
+```mermaid
+flowchart TB
+  subgraph pc["PC de desarrollo (Docker Desktop)"]
+    subgraph kind["Clúster kind 'aegisvolt' (1 control-plane + 2 workers)"]
+      ing["ingress-nginx<br/>(control-plane, :8080 del host)"]
+      argo["Argo Rollouts v1.10.2"]
+      nsd["ns aegisvolt-dev<br/>2 réplicas por servicio"]
+      nst["ns aegisvolt-test<br/>3 réplicas"]
+      nsp["ns aegisvolt-prod<br/>5 réplicas"]
+    end
+    reg["Registro localhost:5001<br/>imágenes :&lt;git-sha&gt;"]
+    floci["Floci :4566<br/>(AWS emulado)"]
+    pf["Prefect server + worker<br/>:4200"]
+    runner["GitHub Actions runner<br/>self-hosted, label aegisvolt"]
+  end
+  gh["GitHub<br/>pr.yml · deploy.yml"]
+
+  gh -- "jobs terraform-plan y deploy" --> runner
+  runner -- "terraform apply (workspace = rama)" --> floci
+  runner -- "build + push" --> reg
+  runner -- "kubectl apply -k overlays/&lt;env&gt;" --> argo
+  argo --> nsd & nst & nsp
+  nsd & nst & nsp -- "red docker 'kind'" --> floci
+  pf --> floci
+  pf --> ing
+```
+
+El gateway tiene 1 réplica en cada ambiente, porque el PubSub de las subscriptions está en memoria ([ADR-0005](adr/0005-graphql-bff-y-rest-interno.md)).
 
 ## 3. Red por ambiente (Terraform: `infra/modules/network`, `vpc-endpoints`, `api-gateway`)
 
